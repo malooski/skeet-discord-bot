@@ -1,0 +1,7 @@
+version: '3'
+
+services:
+  skeet-poster:
+    image: skeet-poster
+    env_file:
+      - .env

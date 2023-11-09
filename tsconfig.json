@@ -1,0 +1,32 @@
+{
+  "compilerOptions": {
+    // add Bun type definitions
+    "types": ["bun-types"],
+
+    // enable latest features
+    "lib": ["es2020"],
+    "module": "CommonJS",
+    "target": "ES2020",
+
+    "rootDir": "./src",
+
+    // if TS 5.x+
+    "moduleResolution": "Node10",
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "moduleDetection": "force",
+    // if TS 4.x or earlier
+    // "moduleResolution": "nodenext",
+
+    "jsx": "react-jsx", // support JSX
+    "allowJs": true, // allow importing `.js` from `.ts`
+
+    // best practices
+    "strict": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "composite": true,
+    "downlevelIteration": true,
+    "allowSyntheticDefaultImports": true
+  }
+}
