@@ -3,10 +3,3 @@ export function delayMs(ms: number): Promise<void> {
         setTimeout(resolve, ms);
     });
 }
-
-export async function take<T>(iter: AsyncIterator<T, T, T>) {
-    return iter
-        .next()
-
-        .then(x => x.value);
-}
