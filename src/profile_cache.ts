@@ -2,6 +2,7 @@ import { BskyAgent, AppBskyActorProfile } from "@atproto/api";
 import { DidResolver, HandleResolver } from "@atproto/identity";
 import { chunk, uniq } from "lodash";
 import { LRUCache } from "lru-cache";
+import { PROFILE_CACHE_MAX, PROFILE_CACHE_TTL } from "./env";
 
 export interface ProfileData {
     did: string;
@@ -12,8 +13,8 @@ export interface ProfileData {
 
 export class ProfileCache {
     profileCache = new LRUCache<string, ProfileData>({
-        max: 1000,
-        ttl: 1000 * 60 * 60 * 24,
+        max: PROFILE_CACHE_MAX,
+        ttl: PROFILE_CACHE_TTL,
     });
 
     agent: BskyAgent;

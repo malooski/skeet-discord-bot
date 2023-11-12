@@ -2,6 +2,15 @@ version: '3'
 
 services:
   skeet-poster:
+    build:
+      context: .
+      dockerfile: Dockerfile
     image: skeet-poster
+    volumes:
+      - dbdata:/app/prisma/db
     env_file:
       - .env
+    restart: always
+
+volumes:
+  dbdata:

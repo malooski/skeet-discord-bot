@@ -34,5 +34,7 @@ model TrackingConfig {
 
   showReposts Boolean @default(false)
 
+  filterHashtag String?
+
   @@unique([userId, channelId])
 }

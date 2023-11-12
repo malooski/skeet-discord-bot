@@ -1,5 +1,6 @@
 import { AppBskyFeedDefs } from "@atproto/api";
 import { HandleResolver } from "@atproto/identity";
+import { toDid } from "@maljs/bsky-helpers";
 
 /**
  * Formats a Blue Sky URI for a post
@@ -43,7 +44,8 @@ export async function convertAtUriToBskyUri(
     const parsed = parseAtUri(uri);
 
     let handle: string;
-    if (isDid(parsed.authority)) {
+    const did = toDid;
+    if (did != null) {
         handle = await handleGetter(parsed.authority);
     } else {
         handle = parsed.authority;
@@ -51,8 +53,4 @@ export async function convertAtUriToBskyUri(
 
     const postHash = parsed.path.split("/").at(-1)!;
     return formatBskyPostUri(handle ?? parsed.authority, postHash);
-}
-
-export function isDid(uri: string): boolean {
-    return uri.startsWith("did:");
 }

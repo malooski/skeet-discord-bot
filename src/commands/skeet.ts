@@ -6,6 +6,7 @@ import {
 import { SkeetPoster } from "../skeet_poster";
 import { DiscordCommandDefinition } from ".";
 import { logger } from "../logger";
+import { toDid, toHashtag } from "@maljs/bsky-helpers";
 
 // /skeet track <handle>
 // /skeet untrack <handle>
@@ -28,9 +29,14 @@ export default function SkeetCommand(app: SkeetPoster): DiscordCommandDefinition
                     )
                     .addBooleanOption(option =>
                         option
-                            .setName("show-reposts")
-                            .setDescription("Show reposts")
+                            .setName("reposts")
+                            .setDescription("Include reposts?")
                             .setRequired(false)
+                    )
+                    .addStringOption(option =>
+                        option
+                            .setName("hashtag")
+                            .setDescription("Include posts only with this hashtag")
                     )
             )
             .addSubcommand(subcommand =>
@@ -53,46 +59,99 @@ export default function SkeetCommand(app: SkeetPoster): DiscordCommandDefinition
             if (subcommand === "track") {
                 if (focusedOption.name === "handle") {
                     if (focusedOption.value.length > 3) {
-                        const searchedResult = await app.agent.searchActorsTypeahead({
-                            q: focusedOption.value,
-                            limit: 5,
-                        });
+                        try {
+                            const searchedResult = await app.agent.searchActorsTypeahead({
+                                q: focusedOption.value,
+                                limit: 5,
+                            });
 
-                        logger.info(`Search result: ${JSON.stringify(searchedResult)}`);
-
-                        choices = searchedResult.data.actors.map(actor => actor.handle);
+                            choices = searchedResult.data.actors.map(actor => actor.handle);
+                        } catch (e) {
+                            logger.error("Error searching actors", e);
+                        }
                     }
                 }
             } else if (subcommand === "untrack") {
                 if (focusedOption.name === "handle") {
-                    const trackedUsers = await app.getTrackedUsersOnChannel(interaction.channelId);
+                    try {
+                        const trackedUsers = await app.getTrackedUsersOnChannel(
+                            interaction.channelId
+                        );
 
-                    choices = trackedUsers.map(user => user.handle);
+                        choices = trackedUsers.map(user => user.handle);
+                    } catch (e) {
+                        logger.error("Error searching actors", e);
+                    }
                 }
             }
 
             await interaction.respond(choices.map(choice => ({ name: choice, value: choice })));
         },
         async execute(interaction: ChatInputCommandInteraction) {
-            logger.debug("Skeet command received");
             if (interaction.options.getSubcommand() === "track") {
+                if (!interaction.channel) {
+                    await interaction.reply(`Invalid channel`);
+                    return;
+                }
+
+                const isAllowed = await app.isUserAllowedToManage(
+                    interaction.user.id,
+                    interaction.channel.id
+                );
+                if (!isAllowed) {
+                    await interaction.reply(`You are not allowed to manage this channel.`);
+                    return;
+                }
+
                 const showReposts = interaction.options.getBoolean("show-reposts") ?? false;
                 const handle = interaction.options.getString("handle") ?? "";
+                const rawHashtag = interaction.options.getString("hashtag") ?? undefined;
+
+                const hashtag = rawHashtag !== undefined ? toHashtag(rawHashtag) : undefined;
+                if (hashtag === null) {
+                    await interaction.reply(`Invalid hashtag`);
+                    return;
+                }
 
                 const profile = await app.profileCache.getProfileByHandle(handle);
+                const did = toDid(profile.did);
+                if (!did) {
+                    await interaction.reply(`Invalid DID for ${handle}`);
+                    return;
+                }
 
-                await app.addTracking(profile.did, interaction.channelId, { showReposts });
+                await app.addTracking(did, interaction.channelId, { showReposts, hashtag });
                 await interaction.reply(`Tracking ${handle} in this channel.`);
 
                 return;
             }
 
             if (interaction.options.getSubcommand() === "untrack") {
+                if (!interaction.channel) {
+                    await interaction.reply(`Invalid channel`);
+                    return;
+                }
+
+                const isAllowed = await app.isUserAllowedToManage(
+                    interaction.user.id,
+                    interaction.channel.id
+                );
+                if (!isAllowed) {
+                    await interaction.reply(`You are not allowed to manage this channel.`);
+                    return;
+                }
+
                 const handle = interaction.options.getString("handle") ?? "";
 
                 const profile = await app.profileCache.getProfileByHandle(handle);
+                const did = toDid(profile.did);
 
-                await app.removeTracking(profile.did, interaction.channelId);
+                if (!did) {
+                    await interaction.reply(`Invalid DID for ${handle}`);
+                    return;
+                }
+
+                await app.removeTracking(did, interaction.channelId);
                 await interaction.reply(`Untracking ${handle} in this channel.`);
 
                 return;

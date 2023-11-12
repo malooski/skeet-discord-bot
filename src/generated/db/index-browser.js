@@ -118,12 +118,18 @@ exports.Prisma.TrackingConfigScalarFieldEnum = {
   id: 'id',
   userId: 'userId',
   channelId: 'channelId',
-  showReposts: 'showReposts'
+  showReposts: 'showReposts',
+  filterHashtag: 'filterHashtag'
 };
 
 exports.Prisma.SortOrder = {
   asc: 'asc',
   desc: 'desc'
+};
+
+exports.Prisma.NullsOrder = {
+  first: 'first',
+  last: 'last'
 };
 
 

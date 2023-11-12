@@ -1,0 +1,21 @@
+# fly.toml app configuration file generated for skeet-discord-bot on 2023-11-11T22:07:03-06:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = "skeet-discord-bot"
+primary_region = "dfw"
+
+[build]
+
+[[mounts]]
+  source = "skeetbot_db"
+  destination = "/app/prisma/db"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = true
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ["app"]

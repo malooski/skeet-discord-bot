@@ -2932,6 +2932,7 @@ export namespace Prisma {
     userId: number | null
     channelId: number | null
     showReposts: boolean | null
+    filterHashtag: string | null
   }
 
   export type TrackingConfigMaxAggregateOutputType = {
@@ -2939,6 +2940,7 @@ export namespace Prisma {
     userId: number | null
     channelId: number | null
     showReposts: boolean | null
+    filterHashtag: string | null
   }
 
   export type TrackingConfigCountAggregateOutputType = {
@@ -2946,6 +2948,7 @@ export namespace Prisma {
     userId: number
     channelId: number
     showReposts: number
+    filterHashtag: number
     _all: number
   }
 
@@ -2967,6 +2970,7 @@ export namespace Prisma {
     userId?: true
     channelId?: true
     showReposts?: true
+    filterHashtag?: true
   }
 
   export type TrackingConfigMaxAggregateInputType = {
@@ -2974,6 +2978,7 @@ export namespace Prisma {
     userId?: true
     channelId?: true
     showReposts?: true
+    filterHashtag?: true
   }
 
   export type TrackingConfigCountAggregateInputType = {
@@ -2981,6 +2986,7 @@ export namespace Prisma {
     userId?: true
     channelId?: true
     showReposts?: true
+    filterHashtag?: true
     _all?: true
   }
 
@@ -3075,6 +3081,7 @@ export namespace Prisma {
     userId: number
     channelId: number
     showReposts: boolean
+    filterHashtag: string | null
     _count: TrackingConfigCountAggregateOutputType | null
     _avg: TrackingConfigAvgAggregateOutputType | null
     _sum: TrackingConfigSumAggregateOutputType | null
@@ -3101,6 +3108,7 @@ export namespace Prisma {
     userId?: boolean
     channelId?: boolean
     showReposts?: boolean
+    filterHashtag?: boolean
     user?: boolean | TrackedUserDefaultArgs<ExtArgs>
     channel?: boolean | DiscordChannelDefaultArgs<ExtArgs>
   }, ExtArgs["result"]["trackingConfig"]>
@@ -3110,6 +3118,7 @@ export namespace Prisma {
     userId?: boolean
     channelId?: boolean
     showReposts?: boolean
+    filterHashtag?: boolean
   }
 
   export type TrackingConfigInclude<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
@@ -3129,6 +3138,7 @@ export namespace Prisma {
       userId: number
       channelId: number
       showReposts: boolean
+      filterHashtag: string | null
     }, ExtArgs["result"]["trackingConfig"]>
     composites: {}
   }
@@ -3514,6 +3524,7 @@ export namespace Prisma {
     readonly userId: FieldRef<"TrackingConfig", 'Int'>
     readonly channelId: FieldRef<"TrackingConfig", 'Int'>
     readonly showReposts: FieldRef<"TrackingConfig", 'Boolean'>
+    readonly filterHashtag: FieldRef<"TrackingConfig", 'String'>
   }
     
 
@@ -3860,7 +3871,8 @@ export namespace Prisma {
     id: 'id',
     userId: 'userId',
     channelId: 'channelId',
-    showReposts: 'showReposts'
+    showReposts: 'showReposts',
+    filterHashtag: 'filterHashtag'
   };
 
   export type TrackingConfigScalarFieldEnum = (typeof TrackingConfigScalarFieldEnum)[keyof typeof TrackingConfigScalarFieldEnum]
@@ -3872,6 +3884,14 @@ export namespace Prisma {
   };
 
   export type SortOrder = (typeof SortOrder)[keyof typeof SortOrder]
+
+
+  export const NullsOrder: {
+    first: 'first',
+    last: 'last'
+  };
+
+  export type NullsOrder = (typeof NullsOrder)[keyof typeof NullsOrder]
 
 
   /**
@@ -4002,6 +4022,7 @@ export namespace Prisma {
     userId?: IntFilter<"TrackingConfig"> | number
     channelId?: IntFilter<"TrackingConfig"> | number
     showReposts?: BoolFilter<"TrackingConfig"> | boolean
+    filterHashtag?: StringNullableFilter<"TrackingConfig"> | string | null
     user?: XOR<TrackedUserRelationFilter, TrackedUserWhereInput>
     channel?: XOR<DiscordChannelRelationFilter, DiscordChannelWhereInput>
   }
@@ -4011,6 +4032,7 @@ export namespace Prisma {
     userId?: SortOrder
     channelId?: SortOrder
     showReposts?: SortOrder
+    filterHashtag?: SortOrderInput | SortOrder
     user?: TrackedUserOrderByWithRelationInput
     channel?: DiscordChannelOrderByWithRelationInput
   }
@@ -4024,6 +4046,7 @@ export namespace Prisma {
     userId?: IntFilter<"TrackingConfig"> | number
     channelId?: IntFilter<"TrackingConfig"> | number
     showReposts?: BoolFilter<"TrackingConfig"> | boolean
+    filterHashtag?: StringNullableFilter<"TrackingConfig"> | string | null
     user?: XOR<TrackedUserRelationFilter, TrackedUserWhereInput>
     channel?: XOR<DiscordChannelRelationFilter, DiscordChannelWhereInput>
   }, "id" | "userId_channelId">
@@ -4033,6 +4056,7 @@ export namespace Prisma {
     userId?: SortOrder
     channelId?: SortOrder
     showReposts?: SortOrder
+    filterHashtag?: SortOrderInput | SortOrder
     _count?: TrackingConfigCountOrderByAggregateInput
     _avg?: TrackingConfigAvgOrderByAggregateInput
     _max?: TrackingConfigMaxOrderByAggregateInput
@@ -4048,6 +4072,7 @@ export namespace Prisma {
     userId?: IntWithAggregatesFilter<"TrackingConfig"> | number
     channelId?: IntWithAggregatesFilter<"TrackingConfig"> | number
     showReposts?: BoolWithAggregatesFilter<"TrackingConfig"> | boolean
+    filterHashtag?: StringNullableWithAggregatesFilter<"TrackingConfig"> | string | null
   }
 
   export type TrackedUserCreateInput = {
@@ -4114,6 +4139,7 @@ export namespace Prisma {
 
   export type TrackingConfigCreateInput = {
     showReposts?: boolean
+    filterHashtag?: string | null
     user: TrackedUserCreateNestedOneWithoutTrackingConfigInput
     channel: DiscordChannelCreateNestedOneWithoutTrackingConfigInput
   }
@@ -4123,10 +4149,12 @@ export namespace Prisma {
     userId: number
     channelId: number
     showReposts?: boolean
+    filterHashtag?: string | null
   }
 
   export type TrackingConfigUpdateInput = {
     showReposts?: BoolFieldUpdateOperationsInput | boolean
+    filterHashtag?: NullableStringFieldUpdateOperationsInput | string | null
     user?: TrackedUserUpdateOneRequiredWithoutTrackingConfigNestedInput
     channel?: DiscordChannelUpdateOneRequiredWithoutTrackingConfigNestedInput
   }
@@ -4136,10 +4164,12 @@ export namespace Prisma {
     userId?: IntFieldUpdateOperationsInput | number
     channelId?: IntFieldUpdateOperationsInput | number
     showReposts?: BoolFieldUpdateOperationsInput | boolean
+    filterHashtag?: NullableStringFieldUpdateOperationsInput | string | null
   }
 
   export type TrackingConfigUpdateManyMutationInput = {
     showReposts?: BoolFieldUpdateOperationsInput | boolean
+    filterHashtag?: NullableStringFieldUpdateOperationsInput | string | null
   }
 
   export type TrackingConfigUncheckedUpdateManyInput = {
@@ -4147,6 +4177,7 @@ export namespace Prisma {
     userId?: IntFieldUpdateOperationsInput | number
     channelId?: IntFieldUpdateOperationsInput | number
     showReposts?: BoolFieldUpdateOperationsInput | boolean
+    filterHashtag?: NullableStringFieldUpdateOperationsInput | string | null
   }
 
   export type IntFilter<$PrismaModel = never> = {
@@ -4268,6 +4299,20 @@ export namespace Prisma {
     not?: NestedBoolFilter<$PrismaModel> | boolean
   }
 
+  export type StringNullableFilter<$PrismaModel = never> = {
+    equals?: string | StringFieldRefInput<$PrismaModel> | null
+    in?: string[] | null
+    notIn?: string[] | null
+    lt?: string | StringFieldRefInput<$PrismaModel>
+    lte?: string | StringFieldRefInput<$PrismaModel>
+    gt?: string | StringFieldRefInput<$PrismaModel>
+    gte?: string | StringFieldRefInput<$PrismaModel>
+    contains?: string | StringFieldRefInput<$PrismaModel>
+    startsWith?: string | StringFieldRefInput<$PrismaModel>
+    endsWith?: string | StringFieldRefInput<$PrismaModel>
+    not?: NestedStringNullableFilter<$PrismaModel> | string | null
+  }
+
   export type TrackedUserRelationFilter = {
     is?: TrackedUserWhereInput
     isNot?: TrackedUserWhereInput
@@ -4276,6 +4321,11 @@ export namespace Prisma {
   export type DiscordChannelRelationFilter = {
     is?: DiscordChannelWhereInput
     isNot?: DiscordChannelWhereInput
+  }
+
+  export type SortOrderInput = {
+    sort: SortOrder
+    nulls?: NullsOrder
   }
 
   export type TrackingConfigUserIdChannelIdCompoundUniqueInput = {
@@ -4288,6 +4338,7 @@ export namespace Prisma {
     userId?: SortOrder
     channelId?: SortOrder
     showReposts?: SortOrder
+    filterHashtag?: SortOrder
   }
 
   export type TrackingConfigAvgOrderByAggregateInput = {
@@ -4301,6 +4352,7 @@ export namespace Prisma {
     userId?: SortOrder
     channelId?: SortOrder
     showReposts?: SortOrder
+    filterHashtag?: SortOrder
   }
 
   export type TrackingConfigMinOrderByAggregateInput = {
@@ -4308,6 +4360,7 @@ export namespace Prisma {
     userId?: SortOrder
     channelId?: SortOrder
     showReposts?: SortOrder
+    filterHashtag?: SortOrder
   }
 
   export type TrackingConfigSumOrderByAggregateInput = {
@@ -4322,6 +4375,23 @@ export namespace Prisma {
     _count?: NestedIntFilter<$PrismaModel>
     _min?: NestedBoolFilter<$PrismaModel>
     _max?: NestedBoolFilter<$PrismaModel>
+  }
+
+  export type StringNullableWithAggregatesFilter<$PrismaModel = never> = {
+    equals?: string | StringFieldRefInput<$PrismaModel> | null
+    in?: string[] | null
+    notIn?: string[] | null
+    lt?: string | StringFieldRefInput<$PrismaModel>
+    lte?: string | StringFieldRefInput<$PrismaModel>
+    gt?: string | StringFieldRefInput<$PrismaModel>
+    gte?: string | StringFieldRefInput<$PrismaModel>
+    contains?: string | StringFieldRefInput<$PrismaModel>
+    startsWith?: string | StringFieldRefInput<$PrismaModel>
+    endsWith?: string | StringFieldRefInput<$PrismaModel>
+    not?: NestedStringNullableWithAggregatesFilter<$PrismaModel> | string | null
+    _count?: NestedIntNullableFilter<$PrismaModel>
+    _min?: NestedStringNullableFilter<$PrismaModel>
+    _max?: NestedStringNullableFilter<$PrismaModel>
   }
 
   export type TrackingConfigCreateNestedManyWithoutUserInput = {
@@ -4428,6 +4498,10 @@ export namespace Prisma {
     set?: boolean
   }
 
+  export type NullableStringFieldUpdateOperationsInput = {
+    set?: string | null
+  }
+
   export type TrackedUserUpdateOneRequiredWithoutTrackingConfigNestedInput = {
     create?: XOR<TrackedUserCreateWithoutTrackingConfigInput, TrackedUserUncheckedCreateWithoutTrackingConfigInput>
     connectOrCreate?: TrackedUserCreateOrConnectWithoutTrackingConfigInput
@@ -4518,6 +4592,20 @@ export namespace Prisma {
     not?: NestedBoolFilter<$PrismaModel> | boolean
   }
 
+  export type NestedStringNullableFilter<$PrismaModel = never> = {
+    equals?: string | StringFieldRefInput<$PrismaModel> | null
+    in?: string[] | null
+    notIn?: string[] | null
+    lt?: string | StringFieldRefInput<$PrismaModel>
+    lte?: string | StringFieldRefInput<$PrismaModel>
+    gt?: string | StringFieldRefInput<$PrismaModel>
+    gte?: string | StringFieldRefInput<$PrismaModel>
+    contains?: string | StringFieldRefInput<$PrismaModel>
+    startsWith?: string | StringFieldRefInput<$PrismaModel>
+    endsWith?: string | StringFieldRefInput<$PrismaModel>
+    not?: NestedStringNullableFilter<$PrismaModel> | string | null
+  }
+
   export type NestedBoolWithAggregatesFilter<$PrismaModel = never> = {
     equals?: boolean | BooleanFieldRefInput<$PrismaModel>
     not?: NestedBoolWithAggregatesFilter<$PrismaModel> | boolean
@@ -4526,8 +4614,37 @@ export namespace Prisma {
     _max?: NestedBoolFilter<$PrismaModel>
   }
 
+  export type NestedStringNullableWithAggregatesFilter<$PrismaModel = never> = {
+    equals?: string | StringFieldRefInput<$PrismaModel> | null
+    in?: string[] | null
+    notIn?: string[] | null
+    lt?: string | StringFieldRefInput<$PrismaModel>
+    lte?: string | StringFieldRefInput<$PrismaModel>
+    gt?: string | StringFieldRefInput<$PrismaModel>
+    gte?: string | StringFieldRefInput<$PrismaModel>
+    contains?: string | StringFieldRefInput<$PrismaModel>
+    startsWith?: string | StringFieldRefInput<$PrismaModel>
+    endsWith?: string | StringFieldRefInput<$PrismaModel>
+    not?: NestedStringNullableWithAggregatesFilter<$PrismaModel> | string | null
+    _count?: NestedIntNullableFilter<$PrismaModel>
+    _min?: NestedStringNullableFilter<$PrismaModel>
+    _max?: NestedStringNullableFilter<$PrismaModel>
+  }
+
+  export type NestedIntNullableFilter<$PrismaModel = never> = {
+    equals?: number | IntFieldRefInput<$PrismaModel> | null
+    in?: number[] | null
+    notIn?: number[] | null
+    lt?: number | IntFieldRefInput<$PrismaModel>
+    lte?: number | IntFieldRefInput<$PrismaModel>
+    gt?: number | IntFieldRefInput<$PrismaModel>
+    gte?: number | IntFieldRefInput<$PrismaModel>
+    not?: NestedIntNullableFilter<$PrismaModel> | number | null
+  }
+
   export type TrackingConfigCreateWithoutUserInput = {
     showReposts?: boolean
+    filterHashtag?: string | null
     channel: DiscordChannelCreateNestedOneWithoutTrackingConfigInput
   }
 
@@ -4535,6 +4652,7 @@ export namespace Prisma {
     id?: number
     channelId: number
     showReposts?: boolean
+    filterHashtag?: string | null
   }
 
   export type TrackingConfigCreateOrConnectWithoutUserInput = {
@@ -4566,10 +4684,12 @@ export namespace Prisma {
     userId?: IntFilter<"TrackingConfig"> | number
     channelId?: IntFilter<"TrackingConfig"> | number
     showReposts?: BoolFilter<"TrackingConfig"> | boolean
+    filterHashtag?: StringNullableFilter<"TrackingConfig"> | string | null
   }
 
   export type TrackingConfigCreateWithoutChannelInput = {
     showReposts?: boolean
+    filterHashtag?: string | null
     user: TrackedUserCreateNestedOneWithoutTrackingConfigInput
   }
 
@@ -4577,6 +4697,7 @@ export namespace Prisma {
     id?: number
     userId: number
     showReposts?: boolean
+    filterHashtag?: string | null
   }
 
   export type TrackingConfigCreateOrConnectWithoutChannelInput = {
@@ -4670,6 +4791,7 @@ export namespace Prisma {
 
   export type TrackingConfigUpdateWithoutUserInput = {
     showReposts?: BoolFieldUpdateOperationsInput | boolean
+    filterHashtag?: NullableStringFieldUpdateOperationsInput | string | null
     channel?: DiscordChannelUpdateOneRequiredWithoutTrackingConfigNestedInput
   }
 
@@ -4677,16 +4799,19 @@ export namespace Prisma {
     id?: IntFieldUpdateOperationsInput | number
     channelId?: IntFieldUpdateOperationsInput | number
     showReposts?: BoolFieldUpdateOperationsInput | boolean
+    filterHashtag?: NullableStringFieldUpdateOperationsInput | string | null
   }
 
   export type TrackingConfigUncheckedUpdateManyWithoutUserInput = {
     id?: IntFieldUpdateOperationsInput | number
     channelId?: IntFieldUpdateOperationsInput | number
     showReposts?: BoolFieldUpdateOperationsInput | boolean
+    filterHashtag?: NullableStringFieldUpdateOperationsInput | string | null
   }
 
   export type TrackingConfigUpdateWithoutChannelInput = {
     showReposts?: BoolFieldUpdateOperationsInput | boolean
+    filterHashtag?: NullableStringFieldUpdateOperationsInput | string | null
     user?: TrackedUserUpdateOneRequiredWithoutTrackingConfigNestedInput
   }
 
@@ -4694,12 +4819,14 @@ export namespace Prisma {
     id?: IntFieldUpdateOperationsInput | number
     userId?: IntFieldUpdateOperationsInput | number
     showReposts?: BoolFieldUpdateOperationsInput | boolean
+    filterHashtag?: NullableStringFieldUpdateOperationsInput | string | null
   }
 
   export type TrackingConfigUncheckedUpdateManyWithoutChannelInput = {
     id?: IntFieldUpdateOperationsInput | number
     userId?: IntFieldUpdateOperationsInput | number
     showReposts?: BoolFieldUpdateOperationsInput | boolean
+    filterHashtag?: NullableStringFieldUpdateOperationsInput | string | null
   }
 
 

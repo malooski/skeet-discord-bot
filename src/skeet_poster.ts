@@ -1,4 +1,4 @@
-import { Client, EmbedBuilder, GatewayIntentBits } from "discord.js";
+import { Client, EmbedBuilder, GatewayIntentBits, PermissionsBitField } from "discord.js";
 
 import { BskyAgent } from "@atproto/api";
 import { DidResolver, HandleResolver, MemoryCache } from "@atproto/identity";
@@ -9,6 +9,11 @@ import { PrismaClient } from "./generated/db";
 import { logger } from "./logger";
 import { ProfileCache, ProfileData } from "./profile_cache";
 import { DiscordCommandDefinition } from "./commands";
+import { Did, Hashtag } from "@maljs/bsky-helpers";
+import { REST, Routes } from "discord.js";
+import { BSKY_IDENTIFIER, BSKY_PASSWORD, DISCORD_CLIENT_ID, DISCORD_TOKEN } from "./env";
+import { groupBy, uniq } from "lodash";
+import { toMap, toMapArray } from "./helpers/map";
 
 export class SkeetPoster {
     agent = new BskyAgent({
@@ -27,29 +32,64 @@ export class SkeetPoster {
         didCache: this.didCache,
     });
     profileCache = new ProfileCache(this.agent, this.handleResolver);
+    rest = new REST().setToken(DISCORD_TOKEN);
 
     commands: DiscordCommandDefinition[] = [];
 
     constructor() {}
+
+    async pushCommandsToGuild(guildId: string) {
+        logger.info(
+            {
+                guildId: guildId,
+                commands: this.commands.length,
+            },
+            `Started refreshing slash commands to Guild.`
+        );
+        const commands = this.commands.map(command => command.data.toJSON());
+        await this.rest.put(Routes.applicationGuildCommands(DISCORD_CLIENT_ID, guildId), {
+            body: commands,
+        });
+
+        logger.info(`Successfully reloaded slash commands.`);
+    }
 
     registerCommand(command: DiscordCommandDefinition) {
         this.commands.push(command);
         this.discord.on("interactionCreate", async interaction => {
             if (interaction.isChatInputCommand()) {
                 if (interaction.commandName !== command.data.name) return;
-                await command.execute(interaction);
+
+                try {
+                    await command.execute(interaction);
+                } catch (err) {
+                    logger.error(err, "Command error");
+                    await interaction.reply({
+                        content: "An error occured",
+                        ephemeral: true,
+                    });
+                }
             }
 
             if (interaction.isAutocomplete()) {
                 if (interaction.commandName !== command.data.name) return;
                 if (!command.autocomplete) return;
 
-                await command.autocomplete(interaction);
+                try {
+                    await command.autocomplete(interaction);
+                } catch (err) {
+                    logger.error(err, "Autocomplete error");
+                    await interaction.respond([]);
+                }
             }
         });
     }
 
-    async addTracking(did: string, channelId: string, options?: { showReposts?: boolean }) {
+    async addTracking(
+        did: Did,
+        channelId: string,
+        options?: { showReposts?: boolean; hashtag?: Hashtag }
+    ) {
         const user = await this.db.trackedUser.upsert({
             create: {
                 did,
@@ -75,9 +115,11 @@ export class SkeetPoster {
                 channelId: channel.id,
                 userId: user.id,
                 showReposts: options?.showReposts,
+                filterHashtag: options?.hashtag,
             },
             update: {
                 showReposts: options?.showReposts,
+                filterHashtag: options?.hashtag ?? null,
             },
             where: {
                 userId_channelId: {
@@ -88,9 +130,19 @@ export class SkeetPoster {
         });
 
         this.trackedDids.add(did);
+
+        logger.info(
+            {
+                did,
+                channelId: channelId,
+                hashtag: options?.hashtag,
+                showReposts: options?.showReposts,
+            },
+            `Added tracking`
+        );
     }
 
-    async removeTracking(did: string, channelId: string) {
+    async removeTracking(did: Did, channelId: string) {
         await this.db.trackingConfig.deleteMany({
             where: {
                 channel: {
@@ -144,33 +196,47 @@ export class SkeetPoster {
     }
 
     async refreshTrackedDids() {
-        const allUsers = await this.db.trackedUser.findMany({
+        logger.info("Refreshing trackedDids");
+
+        const configs = await this.db.trackingConfig.findMany({
             select: {
-                did: true,
+                id: true,
+                user: true,
             },
         });
 
         this.trackedDids.clear();
-        for (const user of allUsers) {
-            this.trackedDids.add(user.did);
+        for (const config of configs) {
+            this.trackedDids.add(config.user.did);
         }
     }
 
+    async initialize() {
+        logger.info("Initializing SkeetPoster");
+        this.discord.application?.commands.set(this.commands.map(c => c.data));
+
+        logger.info("Registering commands");
+        const commands = this.commands.map(command => command.data.toJSON());
+        await this.rest.put(Routes.applicationCommands(DISCORD_CLIENT_ID), { body: commands });
+    }
+
     async run() {
-        // Initialize stuff
         await this.db.$connect();
         await this.agent.login({
-            identifier: process.env.BSKY_IDENTIFIER ?? "INVALID",
-            password: process.env.BSKY_PASSWORD ?? "INVALID",
+            identifier: BSKY_IDENTIFIER,
+            password: BSKY_PASSWORD,
         });
 
         this.discord.on("ready", foo => {
             logger.info("Discord client ready");
-
-            this.discord.application?.commands.set(this.commands.map(c => c.data));
         });
 
-        await this.discord.login(process.env.DISCORD_TOKEN ?? "INVALID TOKEN");
+        this.discord.on("guildAvailable", async guild => {
+            logger.info("Guild available", guild.name);
+            await this.pushCommandsToGuild(guild.id);
+        });
+
+        await this.discord.login(DISCORD_TOKEN);
 
         // Refresh trackedDids every 15min
         await this.refreshTrackedDids();
@@ -230,6 +296,10 @@ export class SkeetPoster {
                 });
 
                 for (const config of configs) {
+                    if (config.filterHashtag && !op.record.text.includes(config.filterHashtag)) {
+                        continue;
+                    }
+
                     const channel = channels.find(channel => channel.id === config.channelId);
                     if (!channel) {
                         logger.error("Channel not found in DB");
@@ -253,6 +323,127 @@ export class SkeetPoster {
         };
 
         this.firehose.run();
+        this.announceOnline();
+    }
+
+    async dispose() {
+        await this.db.$disconnect();
+        await this.discord.destroy();
+    }
+
+    async getValidChannel(channelId: string) {
+        const channel = await this.discord.channels.fetch(channelId);
+        if (!channel) {
+            return null;
+        }
+
+        if (!channel.isTextBased()) {
+            return null;
+        }
+
+        return channel;
+    }
+
+    async pruneChannel(channelId: string) {
+        logger.info({ channelId }, "Pruning channel");
+
+        const channel = await this.db.discordChannel.findFirst({
+            where: {
+                channelId: channelId,
+            },
+        });
+
+        if (!channel) {
+            return;
+        }
+
+        await this.db.trackingConfig.deleteMany({
+            where: {
+                channelId: channel.id,
+            },
+        });
+
+        await this.db.discordChannel.delete({
+            where: {
+                channelId: channelId,
+            },
+        });
+
+        await this.refreshTrackedDids();
+    }
+
+    async isUserAllowedToManage(userId: string, channelId: string) {
+        const channel = await this.discord.channels.fetch(channelId);
+
+        if (!channel) {
+            return false;
+        }
+
+        if (!channel.isTextBased()) {
+            return false;
+        }
+
+        if (channel.isDMBased()) {
+            channel.send(`You can't use this command in a DM.`);
+            return false;
+        }
+
+        const member = await channel.guild.members.fetch(userId);
+
+        if (!member.permissions.has(PermissionsBitField.Flags.ManageGuild)) {
+            return false;
+        }
+
+        return true;
+    }
+
+    async announceOnline() {
+        const configs = await this.db.trackingConfig.findMany({
+            select: {
+                channelId: true,
+                channel: true,
+                user: true,
+            },
+        });
+
+        const groupedChannels = toMapArray(
+            configs,
+            c => c.channel.channelId,
+            c => c.user.did
+        );
+
+        for (const [channelId, userDids] of groupedChannels) {
+            const discordChannel = await this.discord.channels.fetch(channelId);
+            if (!discordChannel) {
+                logger.error(
+                    {
+                        channelId: channelId,
+                    },
+                    "Channel not found in Discord"
+                );
+                continue;
+            }
+
+            if (!discordChannel.isTextBased()) {
+                logger.error(
+                    {
+                        channelId: channelId,
+                    },
+                    "Channel is not text based"
+                );
+                continue;
+            }
+
+            const users = await this.profileCache.getProfiles(uniq(userDids));
+
+            const userList = users.map(user => user.handle).join(", ");
+            await discordChannel.send(
+                [
+                    `Skeet Poster is now online!`,
+                    `Tracking ${userDids.length} users in this channel: ${userList}`,
+                ].join("\n")
+            );
+        }
     }
 }
 
