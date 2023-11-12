@@ -1,4 +1,4 @@
-import { Client, EmbedBuilder, GatewayIntentBits, PermissionsBitField } from "discord.js";
+import { Client, EmbedBuilder, GatewayIntentBits, PermissionsBitField, User } from "discord.js";
 
 import { BskyAgent } from "@atproto/api";
 import { DidResolver, HandleResolver, MemoryCache } from "@atproto/identity";
@@ -10,7 +10,13 @@ import { ProfileCache, ProfileData } from "./profile_cache";
 import { DiscordCommandDefinition } from "./commands";
 import { Did, Hashtag } from "@maljs/bsky-helpers";
 import { REST, Routes } from "discord.js";
-import { BSKY_IDENTIFIER, BSKY_PASSWORD, DISCORD_CLIENT_ID, DISCORD_TOKEN } from "./env";
+import {
+    BSKY_IDENTIFIER,
+    BSKY_PASSWORD,
+    DISCORD_ADMIN_ID,
+    DISCORD_CLIENT_ID,
+    DISCORD_TOKEN,
+} from "./env";
 import { groupBy, uniq } from "lodash";
 import { toMap, toMapArray } from "./helpers/map";
 import { PrismaClient } from "@prisma/client";
@@ -33,6 +39,7 @@ export class SkeetPoster {
     });
     profileCache = new ProfileCache(this.agent, this.handleResolver);
     rest = new REST().setToken(DISCORD_TOKEN);
+    discordAdmin: User | undefined;
 
     commands: DiscordCommandDefinition[] = [];
 
@@ -215,32 +222,40 @@ export class SkeetPoster {
         logger.info("Initializing SkeetPoster");
         this.discord.application?.commands.set(this.commands.map(c => c.data));
 
-        logger.info("Registering commands");
-        const commands = this.commands.map(command => command.data.toJSON());
-        await this.rest.put(Routes.applicationCommands(DISCORD_CLIENT_ID), { body: commands });
-    }
+        this.discord.on("ready", () => {
+            logger.info("Discord ready");
+        });
 
-    async run() {
+        await this.discord.login(DISCORD_TOKEN);
+
+        this.discordAdmin = await this.discord.users.fetch(DISCORD_ADMIN_ID);
+
         await this.db.$connect();
         await this.agent.login({
             identifier: BSKY_IDENTIFIER,
             password: BSKY_PASSWORD,
         });
 
-        this.discord.on("ready", foo => {
-            logger.info("Discord client ready");
-        });
+        logger.info("Registering commands");
+        const commands = this.commands.map(command => command.data.toJSON());
+        await this.rest.put(Routes.applicationCommands(DISCORD_CLIENT_ID), { body: commands });
+    }
 
+    async run() {
         this.discord.on("guildAvailable", async guild => {
-            logger.info("Guild available", guild.name);
+            logger.info(
+                { guildId: guild.id, guildName: guild.name },
+                "Guild available",
+                guild.name
+            );
             await this.pushCommandsToGuild(guild.id);
         });
 
-        await this.discord.login(DISCORD_TOKEN);
-
         // Refresh trackedDids every 15min
         await this.refreshTrackedDids();
-        setInterval(() => {}, 1000 * 60 * 60);
+        setInterval(() => {
+            this.refreshTrackedDids();
+        }, 1000 * 60 * 15);
 
         // Listen on firehose
         this.firehose.onEvent = async evt => {

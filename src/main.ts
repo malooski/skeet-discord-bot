@@ -1,8 +1,7 @@
-import * as dotenv from "dotenv";
-dotenv.config();
-
 import SkeetCommand from "./commands/skeet";
 import { SkeetPoster } from "./skeet_poster";
+import { logger } from "./logger";
+import { DISCORD_CLIENT_ID } from "./env";
 
 async function main() {
     const app = new SkeetPoster();
@@ -10,6 +9,10 @@ async function main() {
     app.registerCommand(SkeetCommand(app));
 
     app.run();
+
+    logger.info(
+        `Add to your server with https://discord.com/api/oauth2/authorize?client_id=${DISCORD_CLIENT_ID}&permissions=2147485696&scope=bot`
+    );
 }
 
 main();
