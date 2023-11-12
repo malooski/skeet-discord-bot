@@ -17,7 +17,7 @@ Note: You must have the Manage Server permission in the server to add a bot to t
 Run the following in a channel to track a user's skeets.
 
 ```
-/skeet track [handle] [show-reposts]
+/skeet track [handle] [show-reposts] [hashtag]
 ```
 
 ### Untrack a user's skeets
