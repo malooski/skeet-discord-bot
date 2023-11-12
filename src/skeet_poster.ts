@@ -5,7 +5,6 @@ import { DidResolver, HandleResolver, MemoryCache } from "@atproto/identity";
 import { convertAtUriToBskyUri, makeProfileLink } from "./bsky-helpers";
 import { Firehose, getOpsByType } from "./bsky-helpers/firehose";
 import { isCommit } from "./bsky-helpers/lexicon/types/com/atproto/sync/subscribeRepos";
-import { PrismaClient } from "./generated/db";
 import { logger } from "./logger";
 import { ProfileCache, ProfileData } from "./profile_cache";
 import { DiscordCommandDefinition } from "./commands";
@@ -14,6 +13,7 @@ import { REST, Routes } from "discord.js";
 import { BSKY_IDENTIFIER, BSKY_PASSWORD, DISCORD_CLIENT_ID, DISCORD_TOKEN } from "./env";
 import { groupBy, uniq } from "lodash";
 import { toMap, toMapArray } from "./helpers/map";
+import { PrismaClient } from "@prisma/client";
 
 export class SkeetPoster {
     agent = new BskyAgent({
