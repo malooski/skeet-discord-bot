@@ -16,8 +16,6 @@ async function main() {
     await app.initialize();
     await app.pushCommandsToGuild(guildId);
 
-    await app.dispose();
-
     process.exit(0);
 }
 

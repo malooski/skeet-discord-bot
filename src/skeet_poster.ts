@@ -1,4 +1,11 @@
-import { Client, EmbedBuilder, GatewayIntentBits, PermissionsBitField, User } from "discord.js";
+import {
+    Client,
+    DiscordAPIError,
+    EmbedBuilder,
+    GatewayIntentBits,
+    PermissionsBitField,
+    User,
+} from "discord.js";
 
 import { BskyAgent } from "@atproto/api";
 import { DidResolver, HandleResolver, MemoryCache } from "@atproto/identity";
@@ -8,7 +15,7 @@ import { isCommit } from "./bsky-helpers/lexicon/types/com/atproto/sync/subscrib
 import { logger } from "./logger";
 import { ProfileCache, ProfileData } from "./profile_cache";
 import { DiscordCommandDefinition } from "./commands";
-import { Did, Hashtag } from "@maljs/bsky-helpers";
+import { Did, Hashtag, toHandle } from "@maljs/bsky-helpers";
 import { REST, Routes } from "discord.js";
 import {
     BSKY_IDENTIFIER,
@@ -20,6 +27,7 @@ import {
 import { groupBy, uniq } from "lodash";
 import { toMap, toMapArray } from "./helpers/map";
 import { PrismaClient } from "@prisma/client";
+import { P } from "pino";
 
 export class SkeetPoster {
     agent = new BskyAgent({
@@ -46,50 +54,51 @@ export class SkeetPoster {
     constructor() {}
 
     async pushCommandsToGuild(guildId: string) {
-        logger.info(
-            {
-                guildId: guildId,
-                commands: this.commands.length,
-            },
-            `Started refreshing slash commands to Guild.`
-        );
         const commands = this.commands.map(command => command.data.toJSON());
         await this.rest.put(Routes.applicationGuildCommands(DISCORD_CLIENT_ID, guildId), {
             body: commands,
         });
-
-        logger.info(`Successfully reloaded slash commands.`);
     }
 
     registerCommand(command: DiscordCommandDefinition) {
         this.commands.push(command);
         this.discord.on("interactionCreate", async interaction => {
-            if (interaction.isChatInputCommand()) {
-                if (interaction.commandName !== command.data.name) return;
+            try {
+                if (interaction.isChatInputCommand()) {
+                    if (interaction.commandName !== command.data.name) return;
 
-                try {
                     await command.execute(interaction);
-                } catch (err) {
-                    logger.error(err, "Command error");
-                    await interaction.reply({
-                        content: "An error occured",
-                        ephemeral: true,
-                    });
                 }
-            }
 
-            if (interaction.isAutocomplete()) {
-                if (interaction.commandName !== command.data.name) return;
-                if (!command.autocomplete) return;
+                if (interaction.isAutocomplete()) {
+                    if (interaction.commandName !== command.data.name) return;
+                    if (!command.autocomplete) return;
 
-                try {
                     await command.autocomplete(interaction);
-                } catch (err) {
-                    logger.error(err, "Autocomplete error");
-                    await interaction.respond([]);
                 }
+            } catch (e) {
+                logger.error(e, "Error handling interaction");
             }
         });
+    }
+
+    async isDiscordUserGuildAdmin(userId: string, channelId: string) {
+        try {
+            const channel = await this.assertDbChannelValid(channelId);
+
+            const permissions = await channel.permissionsFor(userId);
+            if (!permissions) {
+                throw new Error("Permissions not found");
+            }
+
+            if (!permissions.has(PermissionsBitField.Flags.Administrator)) {
+                throw new Error("Missing Administrator permission");
+            }
+
+            return true;
+        } catch (e) {
+            return false;
+        }
     }
 
     async addTracking(
@@ -97,55 +106,22 @@ export class SkeetPoster {
         channelId: string,
         options?: { showReposts?: boolean; hashtag?: Hashtag }
     ) {
-        const user = await this.db.trackedUser.upsert({
-            create: {
-                did,
-            },
-            update: {},
-            where: {
-                did,
-            },
-        });
+        const profile = await this.assertBskyUserDidValid(did);
+        const user = await this.upsertDbUser(did);
+        const discordChannel = await this.assertDbChannelValid(channelId);
+        const channel = await this.upsertDbChannel(channelId);
 
-        const channel = await this.db.discordChannel.upsert({
-            create: {
-                channelId: channelId,
-            },
-            update: {},
-            where: {
-                channelId: channelId,
-            },
-        });
-
-        await this.db.trackingConfig.upsert({
-            create: {
-                channelId: channel.id,
-                userId: user.id,
-                showReposts: options?.showReposts,
-                filterHashtag: options?.hashtag,
-            },
-            update: {
-                showReposts: options?.showReposts,
-                filterHashtag: options?.hashtag ?? null,
-            },
-            where: {
-                userId_channelId: {
-                    channelId: channel.id,
-                    userId: user.id,
-                },
-            },
-        });
+        await this.upsertDbConfig(channel.id, user.id, options);
 
         this.trackedDids.add(did);
-
         logger.info(
             {
+                handle: profile.handle,
                 did,
-                channelId: channelId,
-                hashtag: options?.hashtag,
-                showReposts: options?.showReposts,
+                guild: discordChannel.guild.name,
+                channel: discordChannel.name,
             },
-            `Added tracking`
+            `Tracking ${profile.handle} (${did}) in '${discordChannel.guild.name}' '${discordChannel.name}]`
         );
     }
 
@@ -341,22 +317,137 @@ export class SkeetPoster {
         this.announceOnline();
     }
 
-    async dispose() {
-        await this.db.$disconnect();
-        await this.discord.destroy();
+    async assertBskyUserDidValid(did: string) {
+        try {
+            const bskyProfiles = await this.profileCache.fetchProfiles([did]);
+
+            if (bskyProfiles.length === 0) {
+                throw new Error("Profile not found");
+            }
+
+            return bskyProfiles[0];
+        } catch (e) {
+            logger.error(e, "Error upserting user");
+            await this.pruneUserDid(did);
+            throw e;
+        }
     }
 
-    async getValidChannel(channelId: string) {
-        const channel = await this.discord.channels.fetch(channelId);
-        if (!channel) {
-            return null;
-        }
+    async upsertDbUser(did: string) {
+        await this.assertBskyUserDidValid(did);
 
-        if (!channel.isTextBased()) {
-            return null;
+        const user = await this.db.trackedUser.upsert({
+            create: {
+                did,
+            },
+            update: {},
+            where: {
+                did,
+            },
+        });
+
+        return user;
+    }
+
+    async assertDbChannelValid(channelId: string) {
+        try {
+            const discordChannel = await this.discord.channels.fetch(channelId);
+            if (!discordChannel) {
+                throw new Error("Channel not found");
+            }
+
+            if (!discordChannel.isTextBased()) {
+                throw new Error("Channel is not text based");
+            }
+
+            if (discordChannel.isDMBased()) {
+                throw new Error("Channel is DM based");
+            }
+
+            const permissions = await discordChannel.permissionsFor(this.discord.user!);
+            if (!permissions) {
+                throw new Error("Permissions not found");
+            }
+
+            if (!permissions.has(PermissionsBitField.Flags.SendMessages)) {
+                throw new Error("Missing SendMessages permission");
+            }
+
+            return discordChannel;
+        } catch (e) {
+            logger.error(e, "Error upserting channel");
+            await this.pruneChannel(channelId);
+            throw e;
         }
+    }
+
+    async upsertDbChannel(channelId: string) {
+        await this.assertDbChannelValid(channelId);
+
+        const channel = await this.db.discordChannel.upsert({
+            create: {
+                channelId: channelId,
+            },
+            update: {},
+            where: {
+                channelId: channelId,
+            },
+        });
 
         return channel;
+    }
+
+    async upsertDbConfig(
+        channelId: number,
+        userId: number,
+        options?: { showReposts?: boolean; hashtag?: string }
+    ) {
+        await this.db.trackingConfig.upsert({
+            create: {
+                channelId: channelId,
+                userId: userId,
+                filterHashtag: options?.hashtag ?? undefined,
+                showReposts: options?.showReposts ?? false,
+            },
+            update: {
+                filterHashtag: options?.hashtag ?? null,
+                showReposts: options?.showReposts ?? false,
+            },
+            where: {
+                userId_channelId: {
+                    channelId: channelId,
+                    userId: userId,
+                },
+            },
+        });
+    }
+
+    async pruneUserDid(did: string) {
+        logger.info({ did }, "Pruning user");
+
+        const user = await this.db.trackedUser.findUnique({
+            where: {
+                did: did,
+            },
+        });
+
+        if (!user) {
+            return;
+        }
+
+        await this.db.trackingConfig.deleteMany({
+            where: {
+                userId: user.id,
+            },
+        });
+
+        await this.db.trackedUser.delete({
+            where: {
+                did: did,
+            },
+        });
+
+        await this.refreshTrackedDids();
     }
 
     async pruneChannel(channelId: string) {
@@ -387,32 +478,8 @@ export class SkeetPoster {
         await this.refreshTrackedDids();
     }
 
-    async isUserAllowedToManage(userId: string, channelId: string) {
-        const channel = await this.discord.channels.fetch(channelId);
-
-        if (!channel) {
-            return false;
-        }
-
-        if (!channel.isTextBased()) {
-            return false;
-        }
-
-        if (channel.isDMBased()) {
-            channel.send(`You can't use this command in a DM.`);
-            return false;
-        }
-
-        const member = await channel.guild.members.fetch(userId);
-
-        if (!member.permissions.has(PermissionsBitField.Flags.ManageGuild)) {
-            return false;
-        }
-
-        return true;
-    }
-
     async announceOnline() {
+        logger.info("Announcing online");
         const configs = await this.db.trackingConfig.findMany({
             select: {
                 channelId: true,
@@ -428,36 +495,21 @@ export class SkeetPoster {
         );
 
         for (const [channelId, userDids] of groupedChannels) {
-            const discordChannel = await this.discord.channels.fetch(channelId);
-            if (!discordChannel) {
-                logger.error(
-                    {
-                        channelId: channelId,
-                    },
-                    "Channel not found in Discord"
+            try {
+                const dsChannel = await this.assertDbChannelValid(channelId);
+                const users = await this.profileCache.getProfiles(uniq(userDids));
+
+                const userList = users.map(user => user.handle).join(", ");
+
+                await dsChannel.send(
+                    [
+                        `Skeet Poster is now online!`,
+                        `Tracking ${userDids.length} users in this channel: ${userList}`,
+                    ].join("\n")
                 );
-                continue;
+            } catch (e) {
+                logger.error(e, "Error announcing online");
             }
-
-            if (!discordChannel.isTextBased()) {
-                logger.error(
-                    {
-                        channelId: channelId,
-                    },
-                    "Channel is not text based"
-                );
-                continue;
-            }
-
-            const users = await this.profileCache.getProfiles(uniq(userDids));
-
-            const userList = users.map(user => user.handle).join(", ");
-            await discordChannel.send(
-                [
-                    `Skeet Poster is now online!`,
-                    `Tracking ${userDids.length} users in this channel: ${userList}`,
-                ].join("\n")
-            );
         }
     }
 }

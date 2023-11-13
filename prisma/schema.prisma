@@ -35,5 +35,7 @@ model TrackingConfig {
 
   filterHashtag String?
 
+  addedByDiscordUserId String?
+
   @@unique([userId, channelId])
 }

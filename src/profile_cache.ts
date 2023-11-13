@@ -3,6 +3,7 @@ import { DidResolver, HandleResolver } from "@atproto/identity";
 import { chunk, uniq } from "lodash";
 import { LRUCache } from "lru-cache";
 import { PROFILE_CACHE_MAX, PROFILE_CACHE_TTL } from "./env";
+import { Handle } from "@maljs/bsky-helpers";
 
 export interface ProfileData {
     did: string;
@@ -85,7 +86,7 @@ export class ProfileCache {
         return profiles[0];
     }
 
-    async getProfileByHandle(handle: string): Promise<ProfileData> {
+    async getProfileByHandle(handle: Handle): Promise<ProfileData> {
         const did = await this.handleResolver.resolve(handle);
         if (!did) throw new Error("did not found");
         return this.getProfile(did);

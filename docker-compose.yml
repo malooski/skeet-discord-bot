@@ -7,10 +7,7 @@ services:
       dockerfile: Dockerfile
     image: skeet-poster
     volumes:
-      - dbdata:/app/prisma/db
+      - ./prisma/db:/app/prisma/db
     env_file:
       - .env
     restart: always
-
-volumes:
-  dbdata:

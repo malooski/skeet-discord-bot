@@ -8,6 +8,8 @@ async function main() {
 
     app.registerCommand(SkeetCommand(app));
 
+    await app.initialize();
+
     app.run();
 
     logger.info(
