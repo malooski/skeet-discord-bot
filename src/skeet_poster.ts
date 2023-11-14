@@ -25,9 +25,14 @@ import {
     DISCORD_TOKEN,
 } from "./env";
 import { groupBy, uniq } from "lodash";
-import { toMap, toMapArray } from "./helpers/map";
+import { toMap, toMapArray, toMapSet } from "./helpers/map";
 import { PrismaClient } from "@prisma/client";
 import { P } from "pino";
+import { mapAsync } from "./helpers/async";
+import { PrismaConnector } from "./helpers/prisma";
+import { logErrNull } from "./helpers/error";
+
+const GUILD_COMMANDS_TTL = 1000 * 60 * 60 * 24; // 1 days
 
 export class SkeetPoster {
     agent = new BskyAgent({
@@ -50,6 +55,9 @@ export class SkeetPoster {
     discordAdmin: User | undefined;
 
     commands: DiscordCommandDefinition[] = [];
+
+    // Map<GuildId, Date>
+    lastPushedCommands = new Map<string, Date>();
 
     constructor() {}
 
@@ -82,77 +90,77 @@ export class SkeetPoster {
         });
     }
 
-    async isDiscordUserGuildAdmin(userId: string, channelId: string) {
-        try {
-            const channel = await this.assertDbChannelValid(channelId);
+    async assertDiscordUserGuildAdmin(userId: string, channelId: string) {
+        const channel = await this.getValidDiscordChannel(channelId);
 
-            const permissions = await channel.permissionsFor(userId);
-            if (!permissions) {
-                throw new Error("Permissions not found");
-            }
-
-            if (!permissions.has(PermissionsBitField.Flags.Administrator)) {
-                throw new Error("Missing Administrator permission");
-            }
-
-            return true;
-        } catch (e) {
-            return false;
+        const permissions = await channel.permissionsFor(userId);
+        if (!permissions) {
+            throw new Error("Permissions not found");
         }
+
+        if (!permissions.has(PermissionsBitField.Flags.Administrator)) {
+            throw new Error("Missing Administrator permission");
+        }
+
+        return true;
     }
 
-    async addTracking(
-        did: Did,
-        channelId: string,
-        options?: { showReposts?: boolean; hashtag?: Hashtag }
-    ) {
-        const profile = await this.assertBskyUserDidValid(did);
-        const user = await this.upsertDbUser(did);
-        const discordChannel = await this.assertDbChannelValid(channelId);
-        const channel = await this.upsertDbChannel(channelId);
-
-        await this.upsertDbConfig(channel.id, user.id, options);
-
-        this.trackedDids.add(did);
+    async addTracking(args: {
+        did: string;
+        channelId: string;
+        showReposts?: boolean;
+        hashtag?: string;
+        addedByDiscordUserId?: string;
+    }) {
         logger.info(
             {
-                handle: profile.handle,
-                did,
-                guild: discordChannel.guild.name,
-                channel: discordChannel.name,
+                did: args.did,
+                channelId: args.channelId,
+                showReposts: args.showReposts,
+                hashtag: args.hashtag,
+                addedByDiscordUserId: args.addedByDiscordUserId,
             },
-            `Tracking ${profile.handle} (${did}) in '${discordChannel.guild.name}' '${discordChannel.name}]`
+            `Adding tracking for ${args.did} in ${args.channelId}`
         );
+
+        const profile = await this.profileCache.getProfile(args.did);
+        const dsChannel = await this.getValidDiscordChannel(args.channelId);
+
+        try {
+            await this.db.$transaction(async tx => {
+                const user = await this.upsertDbUser({ tx, did: profile.did });
+                const channel = await this.upsertDbChannel({ tx, channelId: dsChannel.id });
+
+                await this.upsertDbConfig({
+                    tx,
+                    channelId: channel.id,
+                    userId: user.id,
+                    showReposts: args.showReposts,
+                    hashtag: args.hashtag,
+                    addedByDiscordUserId: args.addedByDiscordUserId,
+                });
+            });
+        } catch (e) {
+            logger.error(e, "Error adding tracking");
+        }
+
+        this.trackedDids.add(args.did);
     }
 
-    async removeTracking(did: Did, channelId: string) {
-        await this.db.trackingConfig.deleteMany({
-            where: {
-                channel: {
-                    channelId: channelId,
-                },
-                user: {
-                    did: did,
-                },
-            },
-        });
-
-        // Check if user has any more configs
-        const channelsWithUsers = await this.db.trackingConfig.findMany({
-            where: {
-                user: {
-                    did: did,
-                },
-            },
-        });
-
-        if (channelsWithUsers.length === 0) {
-            await this.db.trackedUser.delete({
+    async removeTracking(args: { did: string; channelId: string }) {
+        try {
+            await this.db.trackingConfig.deleteMany({
                 where: {
-                    did: did,
+                    channel: {
+                        channelId: args.channelId,
+                    },
+                    user: {
+                        did: args.did,
+                    },
                 },
             });
-            this.trackedDids.delete(did);
+        } catch (e) {
+            logger.error(e, "Error removing tracking");
         }
     }
 
@@ -217,21 +225,39 @@ export class SkeetPoster {
         await this.rest.put(Routes.applicationCommands(DISCORD_CLIENT_ID), { body: commands });
     }
 
-    async run() {
+    async startRefreshingGuildCommands() {
         this.discord.on("guildAvailable", async guild => {
-            logger.info(
-                { guildId: guild.id, guildName: guild.name },
-                "Guild available",
-                guild.name
-            );
-            await this.pushCommandsToGuild(guild.id);
-        });
+            const lastPushed = this.lastPushedCommands.get(guild.id);
 
+            // If we haven't pushed commands to this guild in a while, push them again
+            if (lastPushed == null || Date.now() - lastPushed.getTime() > GUILD_COMMANDS_TTL) {
+                logger.info(
+                    {
+                        guildName: guild.name,
+                        guildId: guild.id,
+                    },
+                    `Pushing commands to guild "${guild.name}" (${guild.id})`
+                );
+                this.lastPushedCommands.set(guild.id, new Date());
+
+                await this.pushCommandsToGuild(guild.id).catch(e => {
+                    logger.error(e, "Error pushing commands to guild");
+                });
+            }
+        });
+    }
+
+    async startRefreshingTrackedDids() {
         // Refresh trackedDids every 15min
         await this.refreshTrackedDids();
         setInterval(() => {
             this.refreshTrackedDids();
         }, 1000 * 60 * 15);
+    }
+
+    async run() {
+        await this.startRefreshingTrackedDids();
+        await this.startRefreshingGuildCommands();
 
         // Listen on firehose
         this.firehose.onEvent = async evt => {
@@ -247,270 +273,174 @@ export class SkeetPoster {
             ]); // Seed cache with profiles.
 
             for (const op of createdOps) {
-                const profile = await this.profileCache.getProfile(op.author);
+                try {
+                    const profile = await this.profileCache.getProfile(op.author);
 
-                const embed = createSkeetEmbed({
-                    text: op.record.text,
-                    uri: await convertAtUriToBskyUri(op.uri, did =>
-                        this.profileCache.getProfile(did).then(p => p.handle)
-                    ),
-                    authorHandle: profile.handle,
-                    authorUrl: makeProfileLink(profile.handle),
-                    createdAt: new Date(op.record.createdAt),
-                    authorIconUrl: profile.avatar,
-                    authorName: profile.name,
-                });
+                    const embed = createSkeetEmbed({
+                        text: op.record.text,
+                        uri: await convertAtUriToBskyUri(op.uri, did =>
+                            this.profileCache.getProfile(did).then(p => p.handle)
+                        ),
+                        authorHandle: profile.handle,
+                        authorUrl: makeProfileLink(profile.handle),
+                        createdAt: new Date(op.record.createdAt),
+                        authorIconUrl: profile.avatar,
+                        authorName: profile.name,
+                    });
 
-                const user = await this.db.trackedUser.findUnique({
-                    where: {
-                        did: op.author,
-                    },
-                });
-
-                if (!user) {
-                    logger.error("User not found in DB");
-                    continue;
-                }
-
-                const configs = await this.db.trackingConfig.findMany({
-                    where: {
-                        userId: user.id,
-                    },
-                });
-
-                const channels = await this.db.discordChannel.findMany({
-                    where: {
-                        id: {
-                            in: configs.map(config => config.channelId),
+                    const user = await this.db.trackedUser.findUnique({
+                        where: {
+                            did: op.author,
                         },
-                    },
-                });
+                    });
 
-                for (const config of configs) {
-                    if (config.filterHashtag && !op.record.text.includes(config.filterHashtag)) {
+                    if (!user) {
+                        logger.error("User not found in DB");
                         continue;
                     }
 
-                    const channel = channels.find(channel => channel.id === config.channelId);
-                    if (!channel) {
-                        logger.error("Channel not found in DB");
-                        continue;
-                    }
+                    const configs = await this.db.trackingConfig.findMany({
+                        select: {
+                            filterHashtag: true,
+                            showReposts: true,
 
-                    const discordChannel = await this.discord.channels.fetch(channel.channelId);
-                    if (!discordChannel) {
-                        logger.error("Channel not found in Discord");
-                        continue;
-                    }
+                            channel: true,
+                        },
+                        where: {
+                            userId: user.id,
+                        },
+                    });
 
-                    if (!discordChannel.isTextBased()) {
-                        logger.error("Channel is not text based");
-                        continue;
-                    }
+                    for (const config of configs) {
+                        try {
+                            if (
+                                config.filterHashtag &&
+                                !op.record.text.includes(config.filterHashtag)
+                            ) {
+                                continue;
+                            }
 
-                    await discordChannel.send({ embeds: [embed] });
+                            const dsChannel = await this.getValidDiscordChannel(
+                                config.channel.channelId
+                            );
+
+                            await dsChannel.send({ embeds: [embed] });
+                        } catch (e) {
+                            logger.error(e, "Error sending embed");
+                        }
+                    }
+                } catch (e) {
+                    logger.error(e, "Error processing op");
                 }
             }
         };
 
         this.firehose.run();
-        this.announceOnline();
+
+        logger.info("SkeetPoster is now running");
     }
 
-    async assertBskyUserDidValid(did: string) {
-        try {
-            const bskyProfiles = await this.profileCache.fetchProfiles([did]);
-
-            if (bskyProfiles.length === 0) {
-                throw new Error("Profile not found");
-            }
-
-            return bskyProfiles[0];
-        } catch (e) {
-            logger.error(e, "Error upserting user");
-            await this.pruneUserDid(did);
-            throw e;
-        }
-    }
-
-    async upsertDbUser(did: string) {
-        await this.assertBskyUserDidValid(did);
-
-        const user = await this.db.trackedUser.upsert({
+    async upsertDbUser(args: { tx?: PrismaConnector; did: string }) {
+        const db = args.tx ?? this.db;
+        const user = await db.trackedUser.upsert({
             create: {
-                did,
+                did: args.did,
             },
             update: {},
             where: {
-                did,
+                did: args.did,
             },
         });
-
         return user;
     }
 
-    async assertDbChannelValid(channelId: string) {
-        try {
-            const discordChannel = await this.discord.channels.fetch(channelId);
-            if (!discordChannel) {
-                throw new Error("Channel not found");
-            }
-
-            if (!discordChannel.isTextBased()) {
-                throw new Error("Channel is not text based");
-            }
-
-            if (discordChannel.isDMBased()) {
-                throw new Error("Channel is DM based");
-            }
-
-            const permissions = await discordChannel.permissionsFor(this.discord.user!);
-            if (!permissions) {
-                throw new Error("Permissions not found");
-            }
-
-            if (!permissions.has(PermissionsBitField.Flags.SendMessages)) {
-                throw new Error("Missing SendMessages permission");
-            }
-
-            return discordChannel;
-        } catch (e) {
-            logger.error(e, "Error upserting channel");
-            await this.pruneChannel(channelId);
-            throw e;
-        }
-    }
-
-    async upsertDbChannel(channelId: string) {
-        await this.assertDbChannelValid(channelId);
-
-        const channel = await this.db.discordChannel.upsert({
+    async upsertDbChannel(args: { tx?: PrismaConnector; channelId: string }) {
+        const db = args.tx ?? this.db;
+        const channel = await db.discordChannel.upsert({
             create: {
-                channelId: channelId,
+                channelId: args.channelId,
             },
             update: {},
             where: {
-                channelId: channelId,
+                channelId: args.channelId,
             },
         });
 
         return channel;
     }
 
-    async upsertDbConfig(
-        channelId: number,
-        userId: number,
-        options?: { showReposts?: boolean; hashtag?: string }
-    ) {
-        await this.db.trackingConfig.upsert({
+    async upsertDbConfig(args: {
+        tx?: PrismaConnector;
+        channelId: number;
+        userId: number;
+        showReposts?: boolean;
+        hashtag?: string;
+        addedByDiscordUserId?: string;
+    }) {
+        const db = args.tx ?? this.db;
+        await db.trackingConfig.upsert({
             create: {
-                channelId: channelId,
-                userId: userId,
-                filterHashtag: options?.hashtag ?? undefined,
-                showReposts: options?.showReposts ?? false,
+                channelId: args.channelId,
+                userId: args.userId,
+                filterHashtag: args?.hashtag ?? undefined,
+                showReposts: args?.showReposts ?? false,
+                addedByDiscordUserId: args.addedByDiscordUserId,
             },
             update: {
-                filterHashtag: options?.hashtag ?? null,
-                showReposts: options?.showReposts ?? false,
+                filterHashtag: args?.hashtag ?? null,
+                showReposts: args?.showReposts ?? false,
+                ...(args.addedByDiscordUserId != null
+                    ? { addedByDiscordUserId: args.addedByDiscordUserId }
+                    : {}),
             },
             where: {
                 userId_channelId: {
-                    channelId: channelId,
-                    userId: userId,
+                    channelId: args.channelId,
+                    userId: args.userId,
                 },
             },
         });
     }
 
-    async pruneUserDid(did: string) {
-        logger.info({ did }, "Pruning user");
-
-        const user = await this.db.trackedUser.findUnique({
-            where: {
-                did: did,
-            },
-        });
-
-        if (!user) {
-            return;
+    async getValidDiscordChannel(channelId: string) {
+        const channel = await this.discord.channels.fetch(channelId);
+        if (!channel?.isTextBased()) {
+            throw new Error("Channel is not a text channel");
         }
 
-        await this.db.trackingConfig.deleteMany({
-            where: {
-                userId: user.id,
-            },
-        });
+        if (channel.isDMBased()) {
+            throw new Error("Channel is a DM channel");
+        }
 
-        await this.db.trackedUser.delete({
-            where: {
-                did: did,
-            },
-        });
+        if (channel.isThread()) {
+            throw new Error("Channel is a thread");
+        }
 
-        await this.refreshTrackedDids();
+        // Has posting permissions
+
+        const permissions = await channel.permissionsFor(this.discord.user!);
+
+        if (
+            permissions == null ||
+            permissions.has(PermissionsBitField.Flags.SendMessages) === false
+        ) {
+            throw new Error("Channel does not have send messages permission");
+        }
+
+        return channel;
     }
 
-    async pruneChannel(channelId: string) {
-        logger.info({ channelId }, "Pruning channel");
+    async getChannelStatus(channelId: string) {
+        const users = await this.getTrackedUsersOnChannel(channelId);
 
-        const channel = await this.db.discordChannel.findFirst({
-            where: {
-                channelId: channelId,
-            },
-        });
+        const userList = users.map(user => user.handle).join(", ");
 
-        if (!channel) {
-            return;
-        }
+        const msg = [
+            `Skeet Poster is online!`,
+            `Tracking ${users.length} users in this channel: ${userList}`,
+        ].join("\n");
 
-        await this.db.trackingConfig.deleteMany({
-            where: {
-                channelId: channel.id,
-            },
-        });
-
-        await this.db.discordChannel.delete({
-            where: {
-                channelId: channelId,
-            },
-        });
-
-        await this.refreshTrackedDids();
-    }
-
-    async announceOnline() {
-        logger.info("Announcing online");
-        const configs = await this.db.trackingConfig.findMany({
-            select: {
-                channelId: true,
-                channel: true,
-                user: true,
-            },
-        });
-
-        const groupedChannels = toMapArray(
-            configs,
-            c => c.channel.channelId,
-            c => c.user.did
-        );
-
-        for (const [channelId, userDids] of groupedChannels) {
-            try {
-                const dsChannel = await this.assertDbChannelValid(channelId);
-                const users = await this.profileCache.getProfiles(uniq(userDids));
-
-                const userList = users.map(user => user.handle).join(", ");
-
-                await dsChannel.send(
-                    [
-                        `Skeet Poster is now online!`,
-                        `Tracking ${userDids.length} users in this channel: ${userList}`,
-                    ].join("\n")
-                );
-            } catch (e) {
-                logger.error(e, "Error announcing online");
-            }
-        }
+        return msg;
     }
 }
 

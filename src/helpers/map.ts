@@ -34,3 +34,23 @@ export function toMapArray<T, K, V>(
 
     return map;
 }
+
+export function toMapSet<T, K, V>(
+    items: T[],
+    keySelector: (item: T) => K,
+    valueSelector: (item: T) => V
+): Map<K, Set<V>> {
+    const map = new Map<K, Set<V>>();
+    for (const item of items) {
+        const key = keySelector(item);
+        const entry = map.get(key);
+        const val = valueSelector(item);
+        if (entry) {
+            entry.add(val);
+        } else {
+            map.set(key, new Set([val]));
+        }
+    }
+
+    return map;
+}

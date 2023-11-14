@@ -7,6 +7,7 @@ import { SkeetPoster } from "../skeet_poster";
 import { DiscordCommandDefinition } from ".";
 import { logger } from "../logger";
 import { Did, toDid, toHandle, toHashtag } from "@maljs/bsky-helpers";
+import { logErr } from "../helpers/error";
 
 // /skeet track <handle>
 // /skeet untrack <handle>
@@ -49,6 +50,9 @@ export default function SkeetCommand(app: SkeetPoster): DiscordCommandDefinition
                             .setDescription("BlueSky handle")
                             .setAutocomplete(true)
                     )
+            )
+            .addSubcommand(subcommand =>
+                subcommand.setName("status").setDescription("Show status")
             ),
         async autocomplete(interaction: AutocompleteInteraction) {
             try {
@@ -100,14 +104,10 @@ export default function SkeetCommand(app: SkeetPoster): DiscordCommandDefinition
                         return;
                     }
 
-                    const isAllowed = await app.isDiscordUserGuildAdmin(
+                    await app.assertDiscordUserGuildAdmin(
                         interaction.user.id,
                         interaction.channel.id
                     );
-                    if (!isAllowed) {
-                        await interaction.reply(`You are not allowed to manage this channel.`);
-                        return;
-                    }
 
                     const handleRaw = interaction.options.getString("handle") ?? "";
                     const handle = toHandle(handleRaw);
@@ -127,9 +127,12 @@ export default function SkeetCommand(app: SkeetPoster): DiscordCommandDefinition
 
                     const profile = await app.profileCache.getProfileByHandle(handle);
 
-                    await app.addTracking(profile.did as Did, interaction.channelId, {
+                    await app.addTracking({
+                        did: profile.did as Did,
+                        channelId: interaction.channelId,
                         showReposts,
                         hashtag,
+                        addedByDiscordUserId: interaction.user.id,
                     });
                     await interaction.reply(`Tracking ${handle} in this channel.`);
 
@@ -142,14 +145,10 @@ export default function SkeetCommand(app: SkeetPoster): DiscordCommandDefinition
                         return;
                     }
 
-                    const isAllowed = await app.isDiscordUserGuildAdmin(
+                    await app.assertDiscordUserGuildAdmin(
                         interaction.user.id,
                         interaction.channel.id
                     );
-                    if (!isAllowed) {
-                        await interaction.reply(`You are not allowed to manage this channel.`);
-                        return;
-                    }
 
                     const handleRaw = interaction.options.getString("handle") ?? "";
                     const handle = toHandle(handleRaw);
@@ -166,10 +165,21 @@ export default function SkeetCommand(app: SkeetPoster): DiscordCommandDefinition
                         return;
                     }
 
-                    await app.removeTracking(did, interaction.channelId);
+                    await app.removeTracking({
+                        did,
+                        channelId: interaction.channelId,
+                    });
                     await interaction.reply(`Untracking ${handle} in this channel.`);
 
                     return;
+                }
+
+                if (interaction.options.getSubcommand() === "status") {
+                    const status = await app.getChannelStatus(interaction.channelId).catch(e => {
+                        logger.error(e, "Error getting channel status");
+                        return "Error getting channel status";
+                    });
+                    await interaction.reply(status).catch(logErr("Error replying"));
                 }
             } catch (e) {
                 logger.error(e, "Error executing command");
