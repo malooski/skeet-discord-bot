@@ -1,36 +1,24 @@
-import {
-    Client,
-    DiscordAPIError,
-    EmbedBuilder,
-    GatewayIntentBits,
-    PermissionsBitField,
-    User,
-} from "discord.js";
+import { Client, EmbedBuilder, GatewayIntentBits, PermissionsBitField, User } from "discord.js";
 
 import { BskyAgent } from "@atproto/api";
 import { DidResolver, HandleResolver, MemoryCache } from "@atproto/identity";
+import { PrismaClient } from "@prisma/client";
+import { REST, Routes } from "discord.js";
 import { convertAtUriToBskyUri, makeProfileLink } from "./bsky-helpers";
 import { Firehose, getOpsByType } from "./bsky-helpers/firehose";
 import { isCommit } from "./bsky-helpers/lexicon/types/com/atproto/sync/subscribeRepos";
-import { logger } from "./logger";
-import { ProfileCache, ProfileData } from "./profile_cache";
 import { DiscordCommandDefinition } from "./commands";
-import { Did, Hashtag, toHandle } from "@maljs/bsky-helpers";
-import { REST, Routes } from "discord.js";
 import {
+    BSKY_FIREHOSE_URL,
     BSKY_IDENTIFIER,
     BSKY_PASSWORD,
     DISCORD_ADMIN_ID,
     DISCORD_CLIENT_ID,
     DISCORD_TOKEN,
 } from "./env";
-import { groupBy, uniq } from "lodash";
-import { toMap, toMapArray, toMapSet } from "./helpers/map";
-import { PrismaClient } from "@prisma/client";
-import { P } from "pino";
-import { mapAsync } from "./helpers/async";
 import { PrismaConnector } from "./helpers/prisma";
-import { logErrNull } from "./helpers/error";
+import { logger } from "./logger";
+import { ProfileCache, ProfileData } from "./profile_cache";
 
 const GUILD_COMMANDS_TTL = 1000 * 60 * 60 * 24; // 1 days
 
@@ -40,7 +28,7 @@ export class SkeetPoster {
     });
     db = new PrismaClient();
     trackedDids = new Set<string>();
-    firehose = new Firehose("wss://bsky.social");
+    firehose = new Firehose(BSKY_FIREHOSE_URL);
     discord = new Client({
         intents: [GatewayIntentBits.Guilds],
     });
@@ -200,6 +188,8 @@ export class SkeetPoster {
         for (const config of configs) {
             this.trackedDids.add(config.user.did);
         }
+
+        logger.info(`Found ${this.trackedDids.size} trackedDids`);
     }
 
     async initialize() {
@@ -259,83 +249,98 @@ export class SkeetPoster {
         await this.startRefreshingTrackedDids();
         await this.startRefreshingGuildCommands();
 
+        let start = Date.now();
+        let lastStart = Date.now();
+
         // Listen on firehose
-        this.firehose.onEvent = async evt => {
-            if (!isCommit(evt)) return;
-            const ops = await getOpsByType(evt);
+        this.firehose.handleEvent = async evt => {
+            try {
+                if (!isCommit(evt)) return;
+                const ops = await getOpsByType(evt);
 
-            const createdOps = ops.posts.creates.filter(op => this.trackedDids.has(op.author));
-            const repostedOps = ops.reposts.creates.filter(op => this.trackedDids.has(op.author));
-
-            await this.profileCache.getProfiles([
-                ...createdOps.map(op => op.author),
-                ...repostedOps.map(op => op.author),
-            ]); // Seed cache with profiles.
-
-            for (const op of createdOps) {
-                try {
-                    const profile = await this.profileCache.getProfile(op.author);
-
-                    const embed = createSkeetEmbed({
-                        text: op.record.text,
-                        uri: await convertAtUriToBskyUri(op.uri, did =>
-                            this.profileCache.getProfile(did).then(p => p.handle)
-                        ),
-                        authorHandle: profile.handle,
-                        authorUrl: makeProfileLink(profile.handle),
-                        createdAt: new Date(op.record.createdAt),
-                        authorIconUrl: profile.avatar,
-                        authorName: profile.name,
-                    });
-
-                    const user = await this.db.trackedUser.findUnique({
-                        where: {
-                            did: op.author,
-                        },
-                    });
-
-                    if (!user) {
-                        logger.error("User not found in DB");
-                        continue;
-                    }
-
-                    const configs = await this.db.trackingConfig.findMany({
-                        select: {
-                            filterHashtag: true,
-                            showReposts: true,
-
-                            channel: true,
-                        },
-                        where: {
-                            userId: user.id,
-                        },
-                    });
-
-                    for (const config of configs) {
-                        try {
-                            if (
-                                config.filterHashtag &&
-                                !op.record.text.includes(config.filterHashtag)
-                            ) {
-                                continue;
-                            }
-
-                            const dsChannel = await this.getValidDiscordChannel(
-                                config.channel.channelId
-                            );
-
-                            await dsChannel.send({ embeds: [embed] });
-                        } catch (e) {
-                            logger.error(e, "Error sending embed");
-                        }
-                    }
-                } catch (e) {
-                    logger.error(e, "Error processing op");
+                for (const op of ops.posts.creates) {
+                    console.log(op.record.text);
                 }
+
+                if (true as boolean) return;
+
+                const createdOps = ops.posts.creates.filter(op => this.trackedDids.has(op.author));
+                const repostedOps = ops.reposts.creates.filter(op =>
+                    this.trackedDids.has(op.author)
+                );
+
+                await this.profileCache.getProfiles([
+                    ...createdOps.map(op => op.author),
+                    ...repostedOps.map(op => op.author),
+                ]); // Seed cache with profiles.
+
+                for (const op of createdOps) {
+                    try {
+                        const profile = await this.profileCache.getProfile(op.author);
+
+                        const embed = createSkeetEmbed({
+                            text: op.record.text,
+                            uri: await convertAtUriToBskyUri(op.uri, did =>
+                                this.profileCache.getProfile(did).then(p => p.handle)
+                            ),
+                            authorHandle: profile.handle,
+                            authorUrl: makeProfileLink(profile.handle),
+                            createdAt: new Date(op.record.createdAt),
+                            authorIconUrl: profile.avatar,
+                            authorName: profile.name,
+                        });
+
+                        const user = await this.db.trackedUser.findUnique({
+                            where: {
+                                did: op.author,
+                            },
+                        });
+
+                        if (!user) {
+                            logger.error("User not found in DB");
+                            continue;
+                        }
+
+                        const configs = await this.db.trackingConfig.findMany({
+                            select: {
+                                filterHashtag: true,
+                                showReposts: true,
+
+                                channel: true,
+                            },
+                            where: {
+                                userId: user.id,
+                            },
+                        });
+
+                        for (const config of configs) {
+                            try {
+                                if (
+                                    config.filterHashtag &&
+                                    !op.record.text.includes(config.filterHashtag)
+                                ) {
+                                    continue;
+                                }
+
+                                const dsChannel = await this.getValidDiscordChannel(
+                                    config.channel.channelId
+                                );
+
+                                await dsChannel.send({ embeds: [embed] });
+                            } catch (e) {
+                                logger.error(e, "Error sending embed");
+                            }
+                        }
+                    } catch (e) {
+                        logger.error(e, "Error processing op");
+                    }
+                }
+            } catch (e) {
+                logger.error(e, "Error processing event");
             }
         };
 
-        this.firehose.run();
+        this.firehose.run(3000);
 
         logger.info("SkeetPoster is now running");
     }

@@ -1,7 +1,6 @@
 import { Subscription } from "@atproto/xrpc-server";
 import { cborToLexRecord, readCar } from "@atproto/repo";
-import { BlobRef, Lexicons } from "@atproto/lexicon";
-
+import { BlobRef } from "@atproto/lexicon";
 import { ids, lexicons } from "./lexicon/lexicons";
 import { Record as PostRecord } from "./lexicon/types/app/bsky/feed/post";
 import { Record as RepostRecord } from "./lexicon/types/app/bsky/feed/repost";
@@ -12,26 +11,17 @@ import {
     OutputSchema as RepoEvent,
     isCommit,
 } from "./lexicon/types/com/atproto/sync/subscribeRepos";
-import { OperationsByType } from "./types";
-import { CID } from "multiformats";
-
-const DEFAULT_SUBSCRIPTION_RECONNECT_DELAY = 3000;
-const DEFAULT_SERVICE = "wss://bsky.social";
 
 export class Firehose {
     public sub: Subscription<RepoEvent>;
 
-    public onEvent?: (evt: RepoEvent) => void;
-
     cursor: number | undefined;
 
-    constructor(public service: string = DEFAULT_SERVICE) {
+    constructor(public service: string) {
         this.sub = new Subscription({
             service: service,
             method: ids.ComAtprotoSyncSubscribeRepos,
-            getParams: () => ({
-                cursor: this.cursor,
-            }),
+            getParams: () => this.getCursor(),
             validate: (value: unknown) => {
                 try {
                     return lexicons.assertValidXrpcMessage<RepoEvent>(
@@ -45,11 +35,13 @@ export class Firehose {
         });
     }
 
-    async run(subscriptionReconnectDelay: number = DEFAULT_SUBSCRIPTION_RECONNECT_DELAY) {
+    handleEvent?: (evt: RepoEvent) => Promise<void>;
+
+    async run(subscriptionReconnectDelay: number) {
         try {
             for await (const evt of this.sub) {
                 try {
-                    await this.onEvent?.(evt);
+                    await this.handleEvent?.(evt);
                 } catch (err) {
                     console.error("repo subscription could not handle message", err);
                 }
@@ -66,6 +58,10 @@ export class Firehose {
 
     async updateCursor(cursor: number) {
         this.cursor = cursor;
+    }
+
+    async getCursor(): Promise<{ cursor?: number }> {
+        return this.cursor != null ? { cursor: this.cursor } : {};
     }
 }
 
@@ -98,6 +94,8 @@ export const getOpsByType = async (evt: Commit): Promise<OperationsByType> => {
                 opsByType.likes.creates.push({ record, ...create });
             } else if (collection === ids.AppBskyGraphFollow && isFollow(record)) {
                 opsByType.follows.creates.push({ record, ...create });
+            } else {
+                console.warn("unknown record type", collection);
             }
         }
 
@@ -115,6 +113,29 @@ export const getOpsByType = async (evt: Commit): Promise<OperationsByType> => {
     }
 
     return opsByType;
+};
+
+type OperationsByType = {
+    posts: Operations<PostRecord>;
+    reposts: Operations<RepostRecord>;
+    likes: Operations<LikeRecord>;
+    follows: Operations<FollowRecord>;
+};
+
+type Operations<T = Record<string, unknown>> = {
+    creates: CreateOp<T>[];
+    deletes: DeleteOp[];
+};
+
+type CreateOp<T> = {
+    uri: string;
+    cid: string;
+    author: string;
+    record: T;
+};
+
+type DeleteOp = {
+    uri: string;
 };
 
 export const isPost = (obj: unknown): obj is PostRecord => {
