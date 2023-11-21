@@ -39,6 +39,9 @@ export default function SkeetCommand(app: SkeetPoster): DiscordCommandDefinition
                             .setName("hashtag")
                             .setDescription("Include posts only with this hashtag")
                     )
+                    .addBooleanOption(option =>
+                        option.setName("replies").setDescription("Include replies?")
+                    )
             )
             .addSubcommand(subcommand =>
                 subcommand
@@ -117,6 +120,7 @@ export default function SkeetCommand(app: SkeetPoster): DiscordCommandDefinition
                     }
 
                     const showReposts = interaction.options.getBoolean("show-reposts") ?? false;
+                    const includeReplies = interaction.options.getBoolean("replies") ?? false;
                     const rawHashtag = interaction.options.getString("hashtag") ?? undefined;
 
                     const hashtag = rawHashtag !== undefined ? toHashtag(rawHashtag) : undefined;
@@ -133,6 +137,7 @@ export default function SkeetCommand(app: SkeetPoster): DiscordCommandDefinition
                         showReposts,
                         hashtag,
                         addedByDiscordUserId: interaction.user.id,
+                        includeReplies,
                     });
                     await interaction.reply(`Tracking ${handle} in this channel.`);
 

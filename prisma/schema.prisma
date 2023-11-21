@@ -33,7 +33,8 @@ model TrackingConfig {
 
   showReposts Boolean @default(false)
 
-  filterHashtag String?
+  filterHashtag  String?
+  includeReplies Boolean @default(false)
 
   addedByDiscordUserId String?
 

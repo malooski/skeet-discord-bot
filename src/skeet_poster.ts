@@ -19,6 +19,7 @@ import {
 import { PrismaConnector } from "./helpers/prisma";
 import { logger } from "./logger";
 import { ProfileCache, ProfileData } from "./profile_cache";
+import { removeNilEntries } from "./helpers/common";
 
 const GUILD_COMMANDS_TTL = 1000 * 60 * 60 * 24; // 1 days
 
@@ -99,6 +100,7 @@ export class SkeetPoster {
         showReposts?: boolean;
         hashtag?: string;
         addedByDiscordUserId?: string;
+        includeReplies?: boolean;
     }) {
         logger.info(
             {
@@ -107,6 +109,7 @@ export class SkeetPoster {
                 showReposts: args.showReposts,
                 hashtag: args.hashtag,
                 addedByDiscordUserId: args.addedByDiscordUserId,
+                includeReplies: args.includeReplies,
             },
             `Adding tracking for ${args.did} in ${args.channelId}`
         );
@@ -126,6 +129,7 @@ export class SkeetPoster {
                     showReposts: args.showReposts,
                     hashtag: args.hashtag,
                     addedByDiscordUserId: args.addedByDiscordUserId,
+                    includeReplies: args.includeReplies,
                 });
             });
         } catch (e) {
@@ -217,23 +221,9 @@ export class SkeetPoster {
 
     async startRefreshingGuildCommands() {
         this.discord.on("guildAvailable", async guild => {
-            const lastPushed = this.lastPushedCommands.get(guild.id);
-
-            // If we haven't pushed commands to this guild in a while, push them again
-            if (lastPushed == null || Date.now() - lastPushed.getTime() > GUILD_COMMANDS_TTL) {
-                logger.info(
-                    {
-                        guildName: guild.name,
-                        guildId: guild.id,
-                    },
-                    `Pushing commands to guild "${guild.name}" (${guild.id})`
-                );
-                this.lastPushedCommands.set(guild.id, new Date());
-
-                await this.pushCommandsToGuild(guild.id).catch(e => {
-                    logger.error(e, "Error pushing commands to guild");
-                });
-            }
+            await this.pushCommandsToGuild(guild.id).catch(e => {
+                logger.error(e, "Error pushing commands to guild");
+            });
         });
     }
 
@@ -249,20 +239,11 @@ export class SkeetPoster {
         await this.startRefreshingTrackedDids();
         await this.startRefreshingGuildCommands();
 
-        let start = Date.now();
-        let lastStart = Date.now();
-
         // Listen on firehose
         this.firehose.handleEvent = async evt => {
             try {
                 if (!isCommit(evt)) return;
                 const ops = await getOpsByType(evt);
-
-                for (const op of ops.posts.creates) {
-                    console.log(op.record.text);
-                }
-
-                if (true as boolean) return;
 
                 const createdOps = ops.posts.creates.filter(op => this.trackedDids.has(op.author));
                 const repostedOps = ops.reposts.creates.filter(op =>
@@ -305,6 +286,7 @@ export class SkeetPoster {
                             select: {
                                 filterHashtag: true,
                                 showReposts: true,
+                                includeReplies: true,
 
                                 channel: true,
                             },
@@ -319,6 +301,10 @@ export class SkeetPoster {
                                     config.filterHashtag &&
                                     !op.record.text.includes(config.filterHashtag)
                                 ) {
+                                    continue;
+                                }
+
+                                if (op.record.reply && !config.includeReplies) {
                                     continue;
                                 }
 
@@ -381,6 +367,7 @@ export class SkeetPoster {
         showReposts?: boolean;
         hashtag?: string;
         addedByDiscordUserId?: string;
+        includeReplies?: boolean;
     }) {
         const db = args.tx ?? this.db;
         await db.trackingConfig.upsert({
@@ -390,13 +377,15 @@ export class SkeetPoster {
                 filterHashtag: args?.hashtag ?? undefined,
                 showReposts: args?.showReposts ?? false,
                 addedByDiscordUserId: args.addedByDiscordUserId,
+                includeReplies: args.includeReplies,
             },
             update: {
                 filterHashtag: args?.hashtag ?? null,
                 showReposts: args?.showReposts ?? false,
-                ...(args.addedByDiscordUserId != null
-                    ? { addedByDiscordUserId: args.addedByDiscordUserId }
-                    : {}),
+                ...removeNilEntries({
+                    addedByDiscordUserId: args.addedByDiscordUserId,
+                    includeReplies: args.includeReplies,
+                }),
             },
             where: {
                 userId_channelId: {
