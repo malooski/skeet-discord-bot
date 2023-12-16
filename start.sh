@@ -1,5 +1,5 @@
 #!/bin/sh
 
 npm run db:generate
-npm run db:push
+npm run db:deploy
 npm run start

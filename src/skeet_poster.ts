@@ -1,6 +1,6 @@
 import { Client, EmbedBuilder, GatewayIntentBits, PermissionsBitField, User } from "discord.js";
 
-import { BskyAgent } from "@atproto/api";
+import { AppBskyEmbedImages, AppBskyFeedPost, BskyAgent } from "@atproto/api";
 import { DidResolver, HandleResolver, MemoryCache } from "@atproto/identity";
 import { PrismaClient } from "@prisma/client";
 import { REST, Routes } from "discord.js";
@@ -246,21 +246,19 @@ export class SkeetPoster {
                 const ops = await getOpsByType(evt);
 
                 const createdOps = ops.posts.creates.filter(op => this.trackedDids.has(op.author));
-                const repostedOps = ops.reposts.creates.filter(op =>
-                    this.trackedDids.has(op.author)
-                );
 
-                await this.profileCache.getProfiles([
-                    ...createdOps.map(op => op.author),
-                    ...repostedOps.map(op => op.author),
-                ]); // Seed cache with profiles.
+                await this.profileCache.getProfiles([...createdOps.map(op => op.author)]); // Seed cache with profiles.
 
                 for (const op of createdOps) {
                     try {
                         const profile = await this.profileCache.getProfile(op.author);
 
+                        const embeddedImg = getEmbedImage(op.author, op.record);
+                        let text = op.record.text;
+                        // text += "\n\n" + JSON.stringify(op.record);
+
                         const embed = createSkeetEmbed({
-                            text: op.record.text,
+                            text: text,
                             uri: await convertAtUriToBskyUri(op.uri, did =>
                                 this.profileCache.getProfile(did).then(p => p.handle)
                             ),
@@ -269,6 +267,8 @@ export class SkeetPoster {
                             createdAt: new Date(op.record.createdAt),
                             authorIconUrl: profile.avatar,
                             authorName: profile.name,
+                            imgUrl: embeddedImg?.url,
+                            isReply: !!op.record.reply,
                         });
 
                         const user = await this.db.trackedUser.findUnique({
@@ -446,9 +446,17 @@ function createSkeetEmbed(data: {
     authorIconUrl?: string;
     authorUrl: string;
     createdAt: Date;
+    isReply?: boolean;
+
+    imgUrl?: string;
 }) {
-    const embed = new EmbedBuilder()
-        .setTitle(`${data.authorHandle} skeeted`)
+    let title: string = `${data.authorHandle} skeeted.`;
+    if (data.isReply) {
+        title = `${data.authorHandle} replied.`;
+    }
+
+    let embed = new EmbedBuilder()
+        .setTitle(title)
         .setURL(data.uri)
         .setAuthor({
             name: data.authorName ?? data.authorHandle,
@@ -459,5 +467,26 @@ function createSkeetEmbed(data: {
         .setFooter({ text: "Skeet Poster by @maloo.ski" })
         .setTimestamp(new Date(data.createdAt));
 
+    if (data.imgUrl) {
+        embed = embed.setImage(data.imgUrl);
+    }
+
     return embed;
+}
+
+function getEmbedImage(authorDid: string, data: AppBskyFeedPost.Record) {
+    if (AppBskyEmbedImages.isMain(data.embed)) {
+        const image = data.embed.images[0];
+        const ref = image.image.ref.toString();
+
+        let mime = "jpeg";
+        if (image.image.mimeType === "image/png") {
+            mime = "png";
+        }
+
+        return {
+            url: `https://cdn.bsky.app/img/feed_thumbnail/plain/${authorDid}/${ref}@${mime}`,
+            alt: image.alt,
+        };
+    }
 }

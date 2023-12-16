@@ -17,7 +17,7 @@
         "dev": "ts-node src/main.ts",
         "db:generate": "prisma generate",
         "db:migrate": "prisma migrate dev",
-        "db:push": "prisma migrate deploy",
+        "db:deploy": "prisma migrate deploy",
         "register-commands": "ts-node src/scripts/register_commands.ts"
     },
     "author": "",
