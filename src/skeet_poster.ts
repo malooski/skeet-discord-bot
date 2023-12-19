@@ -1,6 +1,6 @@
 import { Client, EmbedBuilder, GatewayIntentBits, PermissionsBitField, User } from "discord.js";
 
-import { AppBskyEmbedImages, AppBskyFeedPost, BskyAgent } from "@atproto/api";
+import { AppBskyEmbedImages, AppBskyFeedPost, BskyAgent, ComAtprotoLabelDefs } from "@atproto/api";
 import { DidResolver, HandleResolver, MemoryCache } from "@atproto/identity";
 import { PrismaClient } from "@prisma/client";
 import { REST, Routes } from "discord.js";
@@ -15,6 +15,7 @@ import {
     DISCORD_ADMIN_ID,
     DISCORD_CLIENT_ID,
     DISCORD_TOKEN,
+    IS_DEV_MODE,
 } from "./env";
 import { PrismaConnector } from "./helpers/prisma";
 import { logger } from "./logger";
@@ -253,9 +254,21 @@ export class SkeetPoster {
                     try {
                         const profile = await this.profileCache.getProfile(op.author);
 
-                        const embeddedImg = getEmbedImage(op.author, op.record);
+                        let embeddedImg = getEmbedImage(op.author, op.record);
                         let text = op.record.text;
-                        // text += "\n\n" + JSON.stringify(op.record);
+
+                        if (embeddedImg) {
+                            const labels = getContentWarningLabels(op.record);
+                            // If there are content warning labels, don't embed the image.
+                            if (labels.length > 0) {
+                                embeddedImg = undefined;
+                                text += `\n\nContent Warning: ${labels.join(", ")}`;
+                            }
+                        }
+
+                        if (IS_DEV_MODE) {
+                            text += "\n\n" + JSON.stringify(op.record);
+                        }
 
                         const embed = createSkeetEmbed({
                             text: text,
@@ -489,4 +502,13 @@ function getEmbedImage(authorDid: string, data: AppBskyFeedPost.Record) {
             alt: image.alt,
         };
     }
+}
+
+const CONTENT_WARNING_LABELS = new Set(["porn", "sexual", "nudity", "gore", "corpse"]);
+function getContentWarningLabels(post: AppBskyFeedPost.Record) {
+    if (!ComAtprotoLabelDefs.isSelfLabels(post.labels)) return [];
+
+    return post.labels.values
+        .filter(label => CONTENT_WARNING_LABELS.has(label.val))
+        .map(v => v.val);
 }

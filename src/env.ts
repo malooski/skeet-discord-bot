@@ -3,6 +3,8 @@ dotenv.config();
 
 import { expectEnvExists, expectIntEnvExists } from "./helpers/env";
 
+export const IS_DEV_MODE = process.env.NODE_ENV === "development";
+
 export const DISCORD_TOKEN = expectEnvExists("DISCORD_TOKEN");
 export const DISCORD_CLIENT_ID = expectEnvExists("DISCORD_CLIENT_ID")!;
 export const DISCORD_ADMIN_ID = expectEnvExists("DISCORD_ADMIN_ID")!;

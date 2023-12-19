@@ -20,4 +20,6 @@ COPY --chown=node:node . .
 VOLUME [ "/app/prisma/db" ]
 RUN npm run build:prod
 
+ENV NODE_ENV=production
+
 CMD ["./start.sh"]

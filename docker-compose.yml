@@ -1,13 +1,13 @@
-version: '3'
+version: "3"
 
 services:
-  skeet-poster:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: skeet-poster
-    volumes:
-      - ./prisma/db:/app/prisma/db
-    env_file:
-      - .env
-    restart: always
+    skeet-poster:
+        build:
+            context: .
+            dockerfile: Dockerfile
+        image: skeet-poster
+        volumes:
+            - ./prisma/db:/app/prisma/db
+        env_file:
+            - .env
+        restart: always
