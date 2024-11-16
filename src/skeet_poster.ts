@@ -13,13 +13,13 @@ import {
     ComAtprotoLabelDefs,
 } from "@atproto/api";
 import { DidResolver, HandleResolver, MemoryCache } from "@atproto/identity";
-import { PrismaClient } from "@prisma/client";
 import { REST, Routes } from "discord.js";
 import { convertAtUriToBskyUri, makeProfileLink } from "./bsky-helpers";
 import { Firehose, getOpsByType } from "./bsky-helpers/firehose";
 import { isCommit } from "./bsky-helpers/lexicon/types/com/atproto/sync/subscribeRepos";
 import type { DiscordCommandDefinition } from "./commands";
 import { ENV_VARS, IS_DEV_MODE } from "./env";
+import { PrismaClient } from "./generated/prisma";
 import { removeNilEntries } from "./helpers/common";
 import type { PrismaConnector } from "./helpers/prisma";
 import { logger } from "./logger";
