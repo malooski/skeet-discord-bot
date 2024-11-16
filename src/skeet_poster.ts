@@ -1,26 +1,29 @@
-import { Client, EmbedBuilder, GatewayIntentBits, PermissionsBitField, User } from "discord.js";
+import {
+    Client,
+    EmbedBuilder,
+    GatewayIntentBits,
+    PermissionsBitField,
+    type User,
+} from "discord.js";
 
-import { AppBskyEmbedImages, AppBskyFeedPost, BskyAgent, ComAtprotoLabelDefs } from "@atproto/api";
+import {
+    AppBskyEmbedImages,
+    type AppBskyFeedPost,
+    BskyAgent,
+    ComAtprotoLabelDefs,
+} from "@atproto/api";
 import { DidResolver, HandleResolver, MemoryCache } from "@atproto/identity";
 import { PrismaClient } from "@prisma/client";
 import { REST, Routes } from "discord.js";
 import { convertAtUriToBskyUri, makeProfileLink } from "./bsky-helpers";
 import { Firehose, getOpsByType } from "./bsky-helpers/firehose";
 import { isCommit } from "./bsky-helpers/lexicon/types/com/atproto/sync/subscribeRepos";
-import { DiscordCommandDefinition } from "./commands";
-import {
-    BSKY_FIREHOSE_URL,
-    BSKY_IDENTIFIER,
-    BSKY_PASSWORD,
-    DISCORD_ADMIN_ID,
-    DISCORD_CLIENT_ID,
-    DISCORD_TOKEN,
-    IS_DEV_MODE,
-} from "./env";
-import { PrismaConnector } from "./helpers/prisma";
-import { logger } from "./logger";
-import { ProfileCache, ProfileData } from "./profile_cache";
+import type { DiscordCommandDefinition } from "./commands";
+import { ENV_VARS, IS_DEV_MODE } from "./env";
 import { removeNilEntries } from "./helpers/common";
+import type { PrismaConnector } from "./helpers/prisma";
+import { logger } from "./logger";
+import { ProfileCache, type ProfileData } from "./profile_cache";
 
 const GUILD_COMMANDS_TTL = 1000 * 60 * 60 * 24; // 1 days
 
@@ -30,7 +33,7 @@ export class SkeetPoster {
     });
     db = new PrismaClient();
     trackedDids = new Set<string>();
-    firehose = new Firehose(BSKY_FIREHOSE_URL);
+    firehose = new Firehose(ENV_VARS.BSKY_FIREHOSE_URL);
     discord = new Client({
         intents: [GatewayIntentBits.Guilds],
     });
@@ -41,7 +44,7 @@ export class SkeetPoster {
         didCache: this.didCache,
     });
     profileCache = new ProfileCache(this.agent, this.handleResolver);
-    rest = new REST().setToken(DISCORD_TOKEN);
+    rest = new REST().setToken(ENV_VARS.DISCORD_TOKEN);
     discordAdmin: User | undefined;
 
     commands: DiscordCommandDefinition[] = [];
@@ -49,21 +52,21 @@ export class SkeetPoster {
     // Map<GuildId, Date>
     lastPushedCommands = new Map<string, Date>();
 
-    constructor() {}
-
     async pushCommandsToGuild(guildId: string) {
-        const commands = this.commands.map(command => command.data.toJSON());
-        await this.rest.put(Routes.applicationGuildCommands(DISCORD_CLIENT_ID, guildId), {
+        const commands = this.commands.map((command) => command.data.toJSON());
+        await this.rest.put(Routes.applicationGuildCommands(ENV_VARS.DISCORD_CLIENT_ID, guildId), {
             body: commands,
         });
     }
 
     registerCommand(command: DiscordCommandDefinition) {
         this.commands.push(command);
-        this.discord.on("interactionCreate", async interaction => {
+        this.discord.on("interactionCreate", async (interaction) => {
+            const interactionString = interaction.toString();
             try {
                 if (interaction.isChatInputCommand()) {
                     if (interaction.commandName !== command.data.name) return;
+                    logger.info({ interaction: interactionString }, "Chat Input Command");
 
                     await command.execute(interaction);
                 }
@@ -75,7 +78,10 @@ export class SkeetPoster {
                     await command.autocomplete(interaction);
                 }
             } catch (e) {
-                logger.error(e, "Error handling interaction");
+                logger.error(
+                    { error: e, interaction: interactionString },
+                    "Error handling interaction",
+                );
             }
         });
     }
@@ -112,16 +118,19 @@ export class SkeetPoster {
                 addedByDiscordUserId: args.addedByDiscordUserId,
                 includeReplies: args.includeReplies,
             },
-            `Adding tracking for ${args.did} in ${args.channelId}`
+            `Adding tracking for ${args.did} in ${args.channelId}`,
         );
 
         const profile = await this.profileCache.getProfile(args.did);
         const dsChannel = await this.getValidDiscordChannel(args.channelId);
 
         try {
-            await this.db.$transaction(async tx => {
+            await this.db.$transaction(async (tx) => {
                 const user = await this.upsertDbUser({ tx, did: profile.did });
-                const channel = await this.upsertDbChannel({ tx, channelId: dsChannel.id });
+                const channel = await this.upsertDbChannel({
+                    tx,
+                    channelId: dsChannel.id,
+                });
 
                 await this.upsertDbConfig({
                     tx,
@@ -169,12 +178,12 @@ export class SkeetPoster {
         const users = await this.db.trackedUser.findMany({
             where: {
                 id: {
-                    in: configs.map(config => config.userId),
+                    in: configs.map((config) => config.userId),
                 },
             },
         });
 
-        const profiles = await this.profileCache.getProfiles(users.map(user => user.did));
+        const profiles = await this.profileCache.getProfiles(users.map((user) => user.did));
 
         return profiles;
     }
@@ -199,30 +208,32 @@ export class SkeetPoster {
 
     async initialize() {
         logger.info("Initializing SkeetPoster");
-        this.discord.application?.commands.set(this.commands.map(c => c.data));
+        this.discord.application?.commands.set(this.commands.map((c) => c.data));
 
         this.discord.on("ready", () => {
             logger.info("Discord ready");
         });
 
-        await this.discord.login(DISCORD_TOKEN);
+        await this.discord.login(ENV_VARS.DISCORD_TOKEN);
 
-        this.discordAdmin = await this.discord.users.fetch(DISCORD_ADMIN_ID);
+        this.discordAdmin = await this.discord.users.fetch(ENV_VARS.DISCORD_ADMIN_ID);
 
         await this.db.$connect();
         await this.agent.login({
-            identifier: BSKY_IDENTIFIER,
-            password: BSKY_PASSWORD,
+            identifier: ENV_VARS.BSKY_IDENTIFIER,
+            password: ENV_VARS.BSKY_PASSWORD,
         });
 
         logger.info("Registering commands");
-        const commands = this.commands.map(command => command.data.toJSON());
-        await this.rest.put(Routes.applicationCommands(DISCORD_CLIENT_ID), { body: commands });
+        const commands = this.commands.map((command) => command.data.toJSON());
+        await this.rest.put(Routes.applicationCommands(ENV_VARS.DISCORD_CLIENT_ID), {
+            body: commands,
+        });
     }
 
     async startRefreshingGuildCommands() {
-        this.discord.on("guildAvailable", async guild => {
-            await this.pushCommandsToGuild(guild.id).catch(e => {
+        this.discord.on("guildAvailable", async (guild) => {
+            await this.pushCommandsToGuild(guild.id).catch((e) => {
                 logger.error(e, "Error pushing commands to guild");
             });
         });
@@ -231,9 +242,12 @@ export class SkeetPoster {
     async startRefreshingTrackedDids() {
         // Refresh trackedDids every 15min
         await this.refreshTrackedDids();
-        setInterval(() => {
-            this.refreshTrackedDids();
-        }, 1000 * 60 * 15);
+        setInterval(
+            () => {
+                this.refreshTrackedDids();
+            },
+            1000 * 60 * 15,
+        );
     }
 
     async run() {
@@ -241,14 +255,16 @@ export class SkeetPoster {
         await this.startRefreshingGuildCommands();
 
         // Listen on firehose
-        this.firehose.handleEvent = async evt => {
+        this.firehose.handleEvent = async (evt) => {
             try {
                 if (!isCommit(evt)) return;
                 const ops = await getOpsByType(evt);
 
-                const createdOps = ops.posts.creates.filter(op => this.trackedDids.has(op.author));
+                const createdOps = ops.posts.creates.filter((op) =>
+                    this.trackedDids.has(op.author),
+                );
 
-                await this.profileCache.getProfiles([...createdOps.map(op => op.author)]); // Seed cache with profiles.
+                await this.profileCache.getProfiles([...createdOps.map((op) => op.author)]); // Seed cache with profiles.
 
                 for (const op of createdOps) {
                     try {
@@ -267,13 +283,13 @@ export class SkeetPoster {
                         }
 
                         if (IS_DEV_MODE) {
-                            text += "\n\n" + JSON.stringify(op.record);
+                            text += `\n\n${JSON.stringify(op.record)}`;
                         }
 
                         const embed = createSkeetEmbed({
                             text: text,
-                            uri: await convertAtUriToBskyUri(op.uri, did =>
-                                this.profileCache.getProfile(did).then(p => p.handle)
+                            uri: await convertAtUriToBskyUri(op.uri, (did) =>
+                                this.profileCache.getProfile(did).then((p) => p.handle),
                             ),
                             authorHandle: profile.handle,
                             authorUrl: makeProfileLink(profile.handle),
@@ -322,7 +338,7 @@ export class SkeetPoster {
                                 }
 
                                 const dsChannel = await this.getValidDiscordChannel(
-                                    config.channel.channelId
+                                    config.channel.channelId,
                                 );
 
                                 await dsChannel.send({ embeds: [embed] });
@@ -424,8 +440,11 @@ export class SkeetPoster {
         }
 
         // Has posting permissions
+        if (!this.discord.user) {
+            throw new Error("Discord user not found");
+        }
 
-        const permissions = await channel.permissionsFor(this.discord.user!);
+        const permissions = await channel.permissionsFor(this.discord.user);
 
         if (
             permissions == null ||
@@ -440,10 +459,10 @@ export class SkeetPoster {
     async getChannelStatus(channelId: string) {
         const users = await this.getTrackedUsersOnChannel(channelId);
 
-        const userList = users.map(user => user.handle).join(", ");
+        const userList = users.map((user) => user.handle).join(", ");
 
         const msg = [
-            `Skeet Poster is online!`,
+            "Skeet Poster is online!",
             `Tracking ${users.length} users in this channel: ${userList}`,
         ].join("\n");
 
@@ -463,7 +482,7 @@ function createSkeetEmbed(data: {
 
     imgUrl?: string;
 }) {
-    let title: string = `${data.authorHandle} skeeted.`;
+    let title = `${data.authorHandle} skeeted.`;
     if (data.isReply) {
         title = `${data.authorHandle} replied.`;
     }
@@ -509,6 +528,6 @@ function getContentWarningLabels(post: AppBskyFeedPost.Record) {
     if (!ComAtprotoLabelDefs.isSelfLabels(post.labels)) return [];
 
     return post.labels.values
-        .filter(label => CONTENT_WARNING_LABELS.has(label.val))
-        .map(v => v.val);
+        .filter((label) => CONTENT_WARNING_LABELS.has(label.val))
+        .map((v) => v.val);
 }

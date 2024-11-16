@@ -1,18 +1,22 @@
 import * as dotenv from "dotenv";
 dotenv.config();
 
+import { z } from "zod";
+
 import { expectEnvExists, expectIntEnvExists } from "./helpers/env";
 
+const ENV_VARS_SCHEMA = z.object({
+    NODE_ENV: z.enum(["development", "production"]),
+    DISCORD_TOKEN: z.string(),
+    DISCORD_CLIENT_ID: z.string(),
+    DISCORD_ADMIN_ID: z.string(),
+    BSKY_IDENTIFIER: z.string(),
+    BSKY_PASSWORD: z.string(),
+    PROFILE_CACHE_MAX: z.coerce.number().default(100),
+    PROFILE_CACHE_TTL: z.coerce.number().default(1000 * 60 * 60),
+
+    BSKY_FIREHOSE_URL: z.string().default("wss://bsky.network"),
+});
+
+export const ENV_VARS = ENV_VARS_SCHEMA.parse(process.env);
 export const IS_DEV_MODE = process.env.NODE_ENV === "development";
-
-export const DISCORD_TOKEN = expectEnvExists("DISCORD_TOKEN");
-export const DISCORD_CLIENT_ID = expectEnvExists("DISCORD_CLIENT_ID")!;
-export const DISCORD_ADMIN_ID = expectEnvExists("DISCORD_ADMIN_ID")!;
-
-export const BSKY_IDENTIFIER = expectEnvExists("BSKY_IDENTIFIER")!;
-export const BSKY_PASSWORD = expectEnvExists("BSKY_PASSWORD")!;
-
-export const BSKY_FIREHOSE_URL = process.env.BSKY_FIREHOSE_URL ?? "wss://bsky.network";
-
-export const PROFILE_CACHE_MAX = expectIntEnvExists("PROFILE_CACHE_MAX", 100);
-export const PROFILE_CACHE_TTL = expectIntEnvExists("PROFILE_CACHE_TTL", 1000 * 60 * 60);

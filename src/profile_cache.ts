@@ -1,9 +1,9 @@
-import { BskyAgent, AppBskyActorProfile } from "@atproto/api";
-import { DidResolver, HandleResolver } from "@atproto/identity";
+import type AtpAgent from "@atproto/api";
+import { DidResolver, type HandleResolver } from "@atproto/identity";
+import type { Handle } from "@maljs/bsky-helpers";
 import { chunk, uniq } from "lodash";
 import { LRUCache } from "lru-cache";
-import { PROFILE_CACHE_MAX, PROFILE_CACHE_TTL } from "./env";
-import { Handle } from "@maljs/bsky-helpers";
+import { ENV_VARS } from "./env";
 
 export interface ProfileData {
     did: string;
@@ -14,21 +14,21 @@ export interface ProfileData {
 
 export class ProfileCache {
     profileCache = new LRUCache<string, ProfileData>({
-        max: PROFILE_CACHE_MAX,
-        ttl: PROFILE_CACHE_TTL,
+        max: ENV_VARS.PROFILE_CACHE_MAX,
+        ttl: ENV_VARS.PROFILE_CACHE_TTL,
     });
 
-    agent: BskyAgent;
+    agent: AtpAgent;
 
     handleResolver: HandleResolver;
 
-    constructor(agent: BskyAgent, handleResolver: HandleResolver) {
+    constructor(agent: AtpAgent, handleResolver: HandleResolver) {
         this.agent = agent;
         this.handleResolver = handleResolver;
     }
 
     async fetchProfiles(dids: string[]): Promise<ProfileData[]> {
-        let result: ProfileData[] = [];
+        const result: ProfileData[] = [];
         if (dids.length === 0) return result;
 
         const didGroups = chunk(dids, 100);

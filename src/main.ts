@@ -1,7 +1,7 @@
 import SkeetCommand from "./commands/skeet";
-import { SkeetPoster } from "./skeet_poster";
+import { ENV_VARS, IS_DEV_MODE } from "./env";
 import { logger } from "./logger";
-import { DISCORD_CLIENT_ID, IS_DEV_MODE } from "./env";
+import { SkeetPoster } from "./skeet_poster";
 
 async function main() {
     if (IS_DEV_MODE) {
@@ -17,7 +17,7 @@ async function main() {
     app.run();
 
     logger.info(
-        `Add to your server with https://discord.com/api/oauth2/authorize?client_id=${DISCORD_CLIENT_ID}&permissions=2147485696&scope=bot`
+        `Add to your server with https://discord.com/api/oauth2/authorize?client_id=${ENV_VARS.DISCORD_CLIENT_ID}&permissions=2147485696&scope=bot`,
     );
 }
 
