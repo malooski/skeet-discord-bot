@@ -1,4 +1,4 @@
-import { AppBskyFeedDefs } from "@atproto/api";
+import type { AppBskyFeedDefs } from "@atproto/api";
 import { HandleResolver } from "@atproto/identity";
 import { toDid } from "@maljs/bsky-helpers";
 
@@ -37,20 +37,13 @@ export function makeProfileLink(handle: string) {
     return `https://bsky.app/profile/${handle}`;
 }
 
-export async function convertAtUriToBskyUri(
-    uri: string,
-    handleGetter: (did: string) => Promise<string>
-) {
+export async function convertAtUriToBskyUri(uri: string, handle: string) {
     const parsed = parseAtUri(uri);
 
-    let handle: string;
-    const did = toDid;
-    if (did != null) {
-        handle = await handleGetter(parsed.authority);
-    } else {
-        handle = parsed.authority;
+    const postHash = parsed.path.split("/").at(-1);
+    if (!postHash) {
+        throw new Error(`Invalid URI: ${uri}`);
     }
 
-    const postHash = parsed.path.split("/").at(-1)!;
     return formatBskyPostUri(handle ?? parsed.authority, postHash);
 }

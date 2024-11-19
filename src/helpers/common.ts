@@ -1,5 +1,5 @@
 export function safeParseInt(value: string): number | undefined {
-    const parsed = parseInt(value);
+    const parsed = Number.parseInt(value);
     if (isNaN(parsed)) {
         return undefined;
     }

@@ -7,32 +7,38 @@ import {
 } from "discord.js";
 
 import {
+    Agent,
     AppBskyEmbedImages,
     type AppBskyFeedPost,
-    BskyAgent,
     ComAtprotoLabelDefs,
+    CredentialSession,
 } from "@atproto/api";
 import { DidResolver, HandleResolver, MemoryCache } from "@atproto/identity";
 import { REST, Routes } from "discord.js";
 import { convertAtUriToBskyUri, makeProfileLink } from "./bsky-helpers";
 import { Firehose, getOpsByType } from "./bsky-helpers/firehose";
-import { isCommit } from "./bsky-helpers/lexicon/types/com/atproto/sync/subscribeRepos";
 import type { DiscordCommandDefinition } from "./commands";
 import { ENV_VARS, IS_DEV_MODE } from "./env";
-import { PrismaClient } from "./generated/prisma";
+import { type DiscordChannel, PrismaClient, type TrackingConfig } from "./generated/prisma";
 import { removeNilEntries } from "./helpers/common";
+import { fetchHandle } from "./helpers/handle";
+import { toMapArray } from "./helpers/map";
 import type { PrismaConnector } from "./helpers/prisma";
+import { isCommit } from "./lexicon/types/com/atproto/sync/subscribeRepos";
 import { logger } from "./logger";
-import { ProfileCache, type ProfileData } from "./profile_cache";
+
+let createdOpCount = 0;
 
 const GUILD_COMMANDS_TTL = 1000 * 60 * 60 * 24; // 1 days
+const SERVICE_URL = new URL("https://bsky.social");
 
 export class SkeetPoster {
-    agent = new BskyAgent({
-        service: "https://bsky.social",
-    });
+    creds = new CredentialSession(SERVICE_URL);
+    agent = new Agent(this.creds);
     db = new PrismaClient();
-    trackedDids = new Set<string>();
+
+    cachedTrackedDids = new Set<string>();
+
     firehose = new Firehose(ENV_VARS.BSKY_FIREHOSE_URL);
     discord = new Client({
         intents: [GatewayIntentBits.Guilds],
@@ -43,7 +49,6 @@ export class SkeetPoster {
         plcUrl: "https://plc.directory",
         didCache: this.didCache,
     });
-    profileCache = new ProfileCache(this.agent, this.handleResolver);
     rest = new REST().setToken(ENV_VARS.DISCORD_TOKEN);
     discordAdmin: User | undefined;
 
@@ -121,12 +126,16 @@ export class SkeetPoster {
             `Adding tracking for ${args.did} in ${args.channelId}`,
         );
 
-        const profile = await this.profileCache.getProfile(args.did);
         const dsChannel = await this.getValidDiscordChannel(args.channelId);
+        const resp = await this.agent.getProfile({ actor: args.did });
+        const profile = resp.data;
+        if (!profile) {
+            throw new Error("Profile not found");
+        }
 
         try {
             await this.db.$transaction(async (tx) => {
-                const user = await this.upsertDbUser({ tx, did: profile.did });
+                const user = await this.upsertDbUser({ tx, did: args.did });
                 const channel = await this.upsertDbChannel({
                     tx,
                     channelId: dsChannel.id,
@@ -143,10 +152,10 @@ export class SkeetPoster {
                 });
             });
         } catch (e) {
-            logger.error(e, "Error adding tracking");
+            logger.error({ error: e }, "Error adding tracking");
         }
 
-        this.trackedDids.add(args.did);
+        this.cachedTrackedDids.add(args.did);
     }
 
     async removeTracking(args: { did: string; channelId: string }) {
@@ -162,11 +171,11 @@ export class SkeetPoster {
                 },
             });
         } catch (e) {
-            logger.error(e, "Error removing tracking");
+            logger.error({ error: e }, "Error removing tracking");
         }
     }
 
-    async getTrackedUsersOnChannel(channelId: string): Promise<ProfileData[]> {
+    async getTrackedDidsOnChannel(channelId: string): Promise<string[]> {
         const configs = await this.db.trackingConfig.findMany({
             where: {
                 channel: {
@@ -183,13 +192,11 @@ export class SkeetPoster {
             },
         });
 
-        const profiles = await this.profileCache.getProfiles(users.map((user) => user.did));
-
-        return profiles;
+        return users.map((user) => user.did);
     }
 
-    async refreshTrackedDids() {
-        logger.info("Refreshing trackedDids");
+    async updateTrackedDids() {
+        logger.info("Updating trackedDids");
 
         const configs = await this.db.trackingConfig.findMany({
             select: {
@@ -198,12 +205,12 @@ export class SkeetPoster {
             },
         });
 
-        this.trackedDids.clear();
+        this.cachedTrackedDids.clear();
         for (const config of configs) {
-            this.trackedDids.add(config.user.did);
+            this.cachedTrackedDids.add(config.user.did);
         }
 
-        logger.info(`Found ${this.trackedDids.size} trackedDids`);
+        logger.info(`Found ${this.cachedTrackedDids.size} trackedDids`);
     }
 
     async initialize() {
@@ -219,7 +226,7 @@ export class SkeetPoster {
         this.discordAdmin = await this.discord.users.fetch(ENV_VARS.DISCORD_ADMIN_ID);
 
         await this.db.$connect();
-        await this.agent.login({
+        await this.creds.login({
             identifier: ENV_VARS.BSKY_IDENTIFIER,
             password: ENV_VARS.BSKY_PASSWORD,
         });
@@ -241,12 +248,12 @@ export class SkeetPoster {
 
     async startRefreshingTrackedDids() {
         // Refresh trackedDids every 15min
-        await this.refreshTrackedDids();
+        await this.updateTrackedDids();
         setInterval(
             () => {
-                this.refreshTrackedDids();
+                this.updateTrackedDids();
             },
-            1000 * 60 * 15,
+            1000 * 60 * 5, // 15min
         );
     }
 
@@ -254,22 +261,34 @@ export class SkeetPoster {
         await this.startRefreshingTrackedDids();
         await this.startRefreshingGuildCommands();
 
+        setInterval(() => {
+            logger.info(`Processed ${createdOpCount} ops/s`);
+            createdOpCount = 0;
+        }, 1000);
+
         // Listen on firehose
         this.firehose.handleEvent = async (evt) => {
             try {
                 if (!isCommit(evt)) return;
                 const ops = await getOpsByType(evt);
 
+                createdOpCount += ops.posts.creates.length;
+
                 const createdOps = ops.posts.creates.filter((op) =>
-                    this.trackedDids.has(op.author),
+                    this.cachedTrackedDids.has(op.author),
                 );
 
-                await this.profileCache.getProfiles([...createdOps.map((op) => op.author)]); // Seed cache with profiles.
-
                 for (const op of createdOps) {
+                    const latencyMs =
+                        new Date().getTime() - new Date(op.record.createdAt).getTime();
+                    logger.debug(
+                        {
+                            latency: latencyMs,
+                            op: op.uri,
+                        },
+                        "Op Latency",
+                    );
                     try {
-                        const profile = await this.profileCache.getProfile(op.author);
-
                         let embeddedImg = getEmbedImage(op.author, op.record);
                         let text = op.record.text;
 
@@ -286,30 +305,20 @@ export class SkeetPoster {
                             text += `\n\n${JSON.stringify(op.record)}`;
                         }
 
+                        const resp = await this.agent.getProfile({ actor: op.author });
+                        const profile = resp.data;
+
                         const embed = createSkeetEmbed({
                             text: text,
-                            uri: await convertAtUriToBskyUri(op.uri, (did) =>
-                                this.profileCache.getProfile(did).then((p) => p.handle),
-                            ),
+                            uri: await convertAtUriToBskyUri(op.uri, profile.handle),
                             authorHandle: profile.handle,
                             authorUrl: makeProfileLink(profile.handle),
                             createdAt: new Date(op.record.createdAt),
                             authorIconUrl: profile.avatar,
-                            authorName: profile.name,
+                            authorName: profile.displayName,
                             imgUrl: embeddedImg?.url,
                             isReply: !!op.record.reply,
                         });
-
-                        const user = await this.db.trackedUser.findUnique({
-                            where: {
-                                did: op.author,
-                            },
-                        });
-
-                        if (!user) {
-                            logger.error("User not found in DB");
-                            continue;
-                        }
 
                         const configs = await this.db.trackingConfig.findMany({
                             select: {
@@ -320,38 +329,47 @@ export class SkeetPoster {
                                 channel: true,
                             },
                             where: {
-                                userId: user.id,
+                                user: {
+                                    did: op.author,
+                                },
                             },
                         });
 
-                        for (const config of configs) {
-                            try {
-                                if (
-                                    config.filterHashtag &&
-                                    !op.record.text.includes(config.filterHashtag)
-                                ) {
-                                    continue;
+                        await Promise.all(
+                            configs.map(async (config) => {
+                                try {
+                                    if (
+                                        config.filterHashtag &&
+                                        !op.record.text.includes(config.filterHashtag)
+                                    ) {
+                                        return;
+                                    }
+
+                                    if (op.record.reply && !config.includeReplies) {
+                                        return;
+                                    }
+
+                                    const dsChannel = await this.getValidDiscordChannel(
+                                        config.channel.channelId,
+                                    );
+
+                                    dsChannel.send({ embeds: [embed] }).catch((e) => {
+                                        logger.error(
+                                            { uri: op.uri, error: e },
+                                            "Error sending embed",
+                                        );
+                                    });
+                                } catch (e) {
+                                    logger.error({ op: op.uri, error: e }, "Error sending embed");
                                 }
-
-                                if (op.record.reply && !config.includeReplies) {
-                                    continue;
-                                }
-
-                                const dsChannel = await this.getValidDiscordChannel(
-                                    config.channel.channelId,
-                                );
-
-                                await dsChannel.send({ embeds: [embed] });
-                            } catch (e) {
-                                logger.error(e, "Error sending embed");
-                            }
-                        }
+                            }),
+                        );
                     } catch (e) {
-                        logger.error(e, "Error processing op");
+                        logger.error({ op: op.uri, error: e }, "Error processing op");
                     }
                 }
             } catch (e) {
-                logger.error(e, "Error processing event");
+                logger.error({ error: e }, "Error processing event");
             }
         };
 
@@ -457,9 +475,10 @@ export class SkeetPoster {
     }
 
     async getChannelStatus(channelId: string) {
-        const users = await this.getTrackedUsersOnChannel(channelId);
+        const users = await this.getTrackedDidsOnChannel(channelId);
 
-        const userList = users.map((user) => user.handle).join(", ");
+        const handles = await Promise.all(users.map((user) => fetchHandle(this.didResolver, user)));
+        const userList = handles.filter((h) => h != null).join(", ");
 
         const msg = [
             "Skeet Poster is online!",

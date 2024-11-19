@@ -1,7 +1,7 @@
-import { Record as PostRecord } from "./lexicon/types/app/bsky/feed/post";
-import { Record as RepostRecord } from "./lexicon/types/app/bsky/feed/repost";
-import { Record as LikeRecord } from "./lexicon/types/app/bsky/feed/like";
-import { Record as FollowRecord } from "./lexicon/types/app/bsky/graph/follow";
+import type { Record as LikeRecord } from "../lexicon/types/app/bsky/feed/like";
+import type { Record as PostRecord } from "../lexicon/types/app/bsky/feed/post";
+import type { Record as RepostRecord } from "../lexicon/types/app/bsky/feed/repost";
+import type { Record as FollowRecord } from "../lexicon/types/app/bsky/graph/follow";
 
 export type OperationsByType = {
     posts: Operations<PostRecord>;

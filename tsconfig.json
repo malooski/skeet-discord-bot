@@ -1,23 +1,23 @@
 {
-  "compilerOptions": {
+    "compilerOptions": {
+        // enable latest features
+        "lib": ["es2020"],
+        "module": "ESNext",
+        "target": "ES2020",
 
-    // enable latest features
-    "lib": ["es2020"],
-    "module": "CommonJS",
-    "target": "ES2020",
+        "rootDir": "./src",
+        "outDir": "./dist",
 
-    "rootDir": "./src",
-    "outDir": "./dist",
+        // if TS 5.x+
+        "moduleResolution": "Node10",
+        "moduleDetection": "force",
 
-    // if TS 5.x+
-    "moduleResolution": "Node10",
-    "moduleDetection": "force",
-
-    // best practices
-    "strict": true,
-    "forceConsistentCasingInFileNames": true,
-    "skipLibCheck": true,
-    "downlevelIteration": true,
-    "allowSyntheticDefaultImports": true
-  }
+        // best practices
+        "strict": true,
+        "forceConsistentCasingInFileNames": true,
+        "skipLibCheck": true,
+        "downlevelIteration": true,
+        "allowSyntheticDefaultImports": true
+    },
+    "exclude": ["./external"]
 }
