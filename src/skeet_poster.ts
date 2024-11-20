@@ -1,30 +1,18 @@
-import {
-    Client,
-    EmbedBuilder,
-    GatewayIntentBits,
-    PermissionsBitField,
-    type User,
-} from "discord.js";
+import { Client, EmbedBuilder, GatewayIntentBits, PermissionsBitField } from "discord.js";
 
-import {
-    Agent,
-    AppBskyEmbedImages,
-    type AppBskyFeedPost,
-    ComAtprotoLabelDefs,
-    CredentialSession,
-} from "@atproto/api";
+import type { AppBskyFeedPost } from "@atcute/client/lexicons";
+import { Agent, type BlobRef, ComAtprotoLabelDefs, CredentialSession } from "@atproto/api";
 import { DidResolver, HandleResolver, MemoryCache } from "@atproto/identity";
+import { Jetstream } from "@skyware/jetstream";
 import { REST, Routes } from "discord.js";
-import { convertAtUriToBskyUri, makeProfileLink } from "./bsky-helpers";
-import { Firehose, getOpsByType } from "./bsky-helpers/firehose";
+import { WebSocket } from "ws";
+import { formatBskyPostUri, getFullsizeImageUrl, makeProfileLink } from "./bsky-helpers";
 import type { DiscordCommandDefinition } from "./commands";
 import { ENV_VARS, IS_DEV_MODE } from "./env";
-import { type DiscordChannel, PrismaClient, type TrackingConfig } from "./generated/prisma";
+import { PrismaClient } from "./generated/prisma";
 import { removeNilEntries } from "./helpers/common";
 import { fetchHandle } from "./helpers/handle";
-import { toMapArray } from "./helpers/map";
 import type { PrismaConnector } from "./helpers/prisma";
-import { isCommit } from "./lexicon/types/com/atproto/sync/subscribeRepos";
 import { logger } from "./logger";
 
 let createdOpCount = 0;
@@ -32,14 +20,24 @@ let createdOpCount = 0;
 const GUILD_COMMANDS_TTL = 1000 * 60 * 60 * 24; // 1 days
 const SERVICE_URL = new URL("https://bsky.social");
 
+interface CachedTrackingConfig {
+    channel: string;
+    showReposts: boolean;
+    includeReplies: boolean;
+    filterHashtag?: string;
+}
+
 export class SkeetPoster {
     creds = new CredentialSession(SERVICE_URL);
     agent = new Agent(this.creds);
     db = new PrismaClient();
 
-    cachedTrackedDids = new Set<string>();
+    // Map<Did, CachedTrackingConfig[]>
+    configs = new Map<string, CachedTrackingConfig[]>();
 
-    firehose = new Firehose(ENV_VARS.BSKY_FIREHOSE_URL);
+    jetstream = new Jetstream({
+        ws: WebSocket,
+    });
     discord = new Client({
         intents: [GatewayIntentBits.Guilds],
     });
@@ -50,7 +48,6 @@ export class SkeetPoster {
         didCache: this.didCache,
     });
     rest = new REST().setToken(ENV_VARS.DISCORD_TOKEN);
-    discordAdmin: User | undefined;
 
     commands: DiscordCommandDefinition[] = [];
 
@@ -155,7 +152,7 @@ export class SkeetPoster {
             logger.error({ error: e }, "Error adding tracking");
         }
 
-        this.cachedTrackedDids.add(args.did);
+        await this.refreshLocalConfigs();
     }
 
     async removeTracking(args: { did: string; channelId: string }) {
@@ -173,6 +170,8 @@ export class SkeetPoster {
         } catch (e) {
             logger.error({ error: e }, "Error removing tracking");
         }
+
+        await this.refreshLocalConfigs();
     }
 
     async getTrackedDidsOnChannel(channelId: string): Promise<string[]> {
@@ -195,22 +194,43 @@ export class SkeetPoster {
         return users.map((user) => user.did);
     }
 
-    async updateTrackedDids() {
-        logger.info("Updating trackedDids");
+    async refreshLocalConfigs() {
+        const startTime = Date.now();
+        logger.info("Updating Cached");
 
         const configs = await this.db.trackingConfig.findMany({
             select: {
                 id: true,
                 user: true,
+                channel: true,
+                showReposts: true,
+                includeReplies: true,
+                filterHashtag: true,
             },
         });
 
-        this.cachedTrackedDids.clear();
+        this.configs.clear();
         for (const config of configs) {
-            this.cachedTrackedDids.add(config.user.did);
+            const configs = this.configs.get(config.user.did) ?? [];
+            configs.push({
+                channel: config.channel.channelId,
+                showReposts: config.showReposts,
+                includeReplies: config.includeReplies,
+                filterHashtag: config.filterHashtag ?? undefined,
+            });
+            this.configs.set(config.user.did, configs);
         }
 
-        logger.info(`Found ${this.cachedTrackedDids.size} trackedDids`);
+        const endTime = Date.now();
+        const duration = endTime - startTime;
+        logger.info(
+            {
+                dids: this.configs.size,
+                configs: configs.length,
+                duration,
+            },
+            "Updated local configs",
+        );
     }
 
     async initialize() {
@@ -222,8 +242,6 @@ export class SkeetPoster {
         });
 
         await this.discord.login(ENV_VARS.DISCORD_TOKEN);
-
-        this.discordAdmin = await this.discord.users.fetch(ENV_VARS.DISCORD_ADMIN_ID);
 
         await this.db.$connect();
         await this.creds.login({
@@ -246,19 +264,19 @@ export class SkeetPoster {
         });
     }
 
-    async startRefreshingTrackedDids() {
+    async startRefreshingLocalConfigs() {
         // Refresh trackedDids every 15min
-        await this.updateTrackedDids();
+        await this.refreshLocalConfigs();
         setInterval(
             () => {
-                this.updateTrackedDids();
+                this.refreshLocalConfigs();
             },
-            1000 * 60 * 5, // 15min
+            1000 * 60 * 5, // 5min
         );
     }
 
     async run() {
-        await this.startRefreshingTrackedDids();
+        await this.startRefreshingLocalConfigs();
         await this.startRefreshingGuildCommands();
 
         setInterval(() => {
@@ -267,113 +285,99 @@ export class SkeetPoster {
         }, 1000);
 
         // Listen on firehose
-        this.firehose.handleEvent = async (evt) => {
+        this.jetstream.onCreate("app.bsky.feed.post", async (event) => {
             try {
-                if (!isCommit(evt)) return;
-                const ops = await getOpsByType(evt);
+                if (event.commit.record.$type !== "app.bsky.feed.post") {
+                    logger.error({ event }, "Event is not a feed post");
+                    return;
+                }
 
-                createdOpCount += ops.posts.creates.length;
+                createdOpCount++;
+                const record = event.commit.record;
 
-                const createdOps = ops.posts.creates.filter((op) =>
-                    this.cachedTrackedDids.has(op.author),
-                );
+                const configs = this.configs.get(event.did);
+                if (!configs || configs.length === 0) return;
 
-                for (const op of createdOps) {
-                    const latencyMs =
-                        new Date().getTime() - new Date(op.record.createdAt).getTime();
-                    logger.debug(
-                        {
-                            latency: latencyMs,
-                            op: op.uri,
-                        },
-                        "Op Latency",
+                const startTime = Date.now();
+
+                // Warn if the event is older than 10 seconds
+                const eventTime = new Date(event.time_us / 1000);
+
+                let imgUrl: string | undefined = undefined;
+                if (record.embed?.$type === "app.bsky.embed.images") {
+                    const embed = record.embed;
+
+                    // TODO: Atproto should have a better type for this (maybe atcute/client)
+                    const refLink = embed.images[0].image.ref.$link;
+                    imgUrl = getFullsizeImageUrl(
+                        event.did,
+                        refLink,
+                        embed.images[0].image.mimeType,
                     );
-                    try {
-                        let embeddedImg = getEmbedImage(op.author, op.record);
-                        let text = op.record.text;
+                }
 
-                        if (embeddedImg) {
-                            const labels = getContentWarningLabels(op.record);
-                            // If there are content warning labels, don't embed the image.
-                            if (labels.length > 0) {
-                                embeddedImg = undefined;
-                                text += `\n\nContent Warning: ${labels.join(", ")}`;
-                            }
-                        }
+                let text = event.commit.record.text;
 
-                        if (IS_DEV_MODE) {
-                            text += `\n\n${JSON.stringify(op.record)}`;
-                        }
-
-                        const resp = await this.agent.getProfile({ actor: op.author });
-                        const profile = resp.data;
-
-                        const embed = createSkeetEmbed({
-                            text: text,
-                            uri: await convertAtUriToBskyUri(op.uri, profile.handle),
-                            authorHandle: profile.handle,
-                            authorUrl: makeProfileLink(profile.handle),
-                            createdAt: new Date(op.record.createdAt),
-                            authorIconUrl: profile.avatar,
-                            authorName: profile.displayName,
-                            imgUrl: embeddedImg?.url,
-                            isReply: !!op.record.reply,
-                        });
-
-                        const configs = await this.db.trackingConfig.findMany({
-                            select: {
-                                filterHashtag: true,
-                                showReposts: true,
-                                includeReplies: true,
-
-                                channel: true,
-                            },
-                            where: {
-                                user: {
-                                    did: op.author,
-                                },
-                            },
-                        });
-
-                        await Promise.all(
-                            configs.map(async (config) => {
-                                try {
-                                    if (
-                                        config.filterHashtag &&
-                                        !op.record.text.includes(config.filterHashtag)
-                                    ) {
-                                        return;
-                                    }
-
-                                    if (op.record.reply && !config.includeReplies) {
-                                        return;
-                                    }
-
-                                    const dsChannel = await this.getValidDiscordChannel(
-                                        config.channel.channelId,
-                                    );
-
-                                    dsChannel.send({ embeds: [embed] }).catch((e) => {
-                                        logger.error(
-                                            { uri: op.uri, error: e },
-                                            "Error sending embed",
-                                        );
-                                    });
-                                } catch (e) {
-                                    logger.error({ op: op.uri, error: e }, "Error sending embed");
-                                }
-                            }),
-                        );
-                    } catch (e) {
-                        logger.error({ op: op.uri, error: e }, "Error processing op");
+                if (imgUrl) {
+                    const labels = getContentWarningLabels(record);
+                    // If there are content warning labels, don't embed the image.
+                    if (labels.length > 0) {
+                        imgUrl = undefined;
+                        text += `\n\nContent Warning: ${labels.join(", ")}`;
                     }
                 }
-            } catch (e) {
-                logger.error({ error: e }, "Error processing event");
-            }
-        };
 
-        this.firehose.run(3000);
+                if (IS_DEV_MODE) {
+                    text += `\n\n${JSON.stringify(event.commit.record)}`;
+                }
+
+                const resp = await this.agent.getProfile({ actor: event.did });
+                const profile = resp.data;
+
+                const embed = createSkeetEmbed({
+                    text: text,
+                    uri: formatBskyPostUri(profile.handle, event.commit.cid),
+                    authorHandle: profile.handle,
+                    authorUrl: makeProfileLink(profile.handle),
+                    createdAt: new Date(event.commit.record.createdAt),
+                    authorIconUrl: profile.avatar,
+                    authorName: profile.displayName,
+                    imgUrl: imgUrl,
+                    isReply: !!event.commit.record.reply,
+                });
+
+                await Promise.all(
+                    configs.map(async (config) => {
+                        // Don't send if the text doesn't include the hashtag
+                        if (config.filterHashtag && !text.includes(config.filterHashtag)) return;
+
+                        // Don't include replies if the config doesn't want them
+                        if (record.reply && !config.includeReplies) return;
+
+                        const channelId = ENV_VARS.DISCORD_CHANNEL_ID_DEBUG ?? config.channel;
+                        const dsChannel = await this.getValidDiscordChannel(channelId);
+                        await dsChannel.send({ embeds: [embed] });
+                    }),
+                );
+
+                const endTime = Date.now();
+                const duration = endTime - startTime;
+                const offset = endTime - eventTime.getTime();
+                logger.info({ duration, offset, event }, "Processed event");
+            } catch (e) {
+                logger.error({ error: e, event }, "Error processing event");
+            }
+        });
+
+        this.jetstream.on("error", (e) => {
+            logger.error({ error: e }, "Error on jetstream");
+        });
+
+        this.jetstream.start();
+
+        this.jetstream.on("close", () => {
+            logger.error("Jetstream closed");
+        });
 
         logger.info("SkeetPoster is now running");
     }
@@ -523,23 +527,6 @@ function createSkeetEmbed(data: {
     }
 
     return embed;
-}
-
-function getEmbedImage(authorDid: string, data: AppBskyFeedPost.Record) {
-    if (AppBskyEmbedImages.isMain(data.embed)) {
-        const image = data.embed.images[0];
-        const ref = image.image.ref.toString();
-
-        let mime = "jpeg";
-        if (image.image.mimeType === "image/png") {
-            mime = "png";
-        }
-
-        return {
-            url: `https://cdn.bsky.app/img/feed_thumbnail/plain/${authorDid}/${ref}@${mime}`,
-            alt: image.alt,
-        };
-    }
 }
 
 const CONTENT_WARNING_LABELS = new Set(["porn", "sexual", "nudity", "gore", "corpse"]);

@@ -76,7 +76,7 @@ export default function SkeetCommand(app: SkeetPoster): DiscordCommandDefinition
 
                                 choices = searchedResult.data.actors.map((actor) => actor.handle);
                             } catch (e) {
-                                logger.error("Error searching actors", e);
+                                logger.error(e, "Error searching actors");
                             }
                         }
                     }
@@ -92,7 +92,7 @@ export default function SkeetCommand(app: SkeetPoster): DiscordCommandDefinition
                             );
                             choices = handles.filter((h) => h != null).map((h) => h);
                         } catch (e) {
-                            logger.error("Error searching actors", e);
+                            logger.error(e, "Error searching actors");
                         }
                     }
                 }
@@ -101,7 +101,7 @@ export default function SkeetCommand(app: SkeetPoster): DiscordCommandDefinition
                     choices.map((choice) => ({ name: choice, value: choice })),
                 );
             } catch (e) {
-                logger.error("Error executing command", e);
+                logger.error(e, "Error executing command");
                 await interaction.respond([]);
             }
         },
@@ -196,7 +196,7 @@ export default function SkeetCommand(app: SkeetPoster): DiscordCommandDefinition
                 }
             } catch (e) {
                 logger.error(e, "Error executing command");
-                await interaction.reply(`Error executing command`);
+                await interaction.reply(`Error executing command: ${e}`);
             }
         },
     };

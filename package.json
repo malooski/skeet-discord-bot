@@ -16,23 +16,28 @@
     "type": "module",
     "scripts": {
         "start": "tsx src/main.ts",
+        "dev": "tsx src/main.ts | pino-pretty",
         "check:ts": "tsc --noEmit",
         "db:generate": "prisma generate",
         "db:migrate": "prisma migrate dev",
         "db:deploy": "prisma migrate deploy",
         "gen-lex": "tsx src/scripts/gen-lex.ts",
-        "format": "biome format --write ./src --verbose",
-        "lint": "biome lint --write ./src --verbose"
+        "format": "biome format --write ./src",
+        "lint": "biome lint --write ./src",
+        "fetch-db": "fly sftp get /app/prisma/db/dev.db ./prisma/dev.db"
     },
     "author": "",
     "license": "ISC",
     "dependencies": {
+        "@atcute/bluesky": "^1.0.8",
+        "@atcute/client": "^2.0.4",
         "@atproto/api": "^0.13.16",
         "@atproto/identity": "^0.4.3",
         "@atproto/repo": "^0.5.5",
         "@atproto/xrpc-server": "^0.7.3",
         "@maljs/bsky-helpers": "^1.0.4",
         "@prisma/client": "=5.11.0",
+        "@skyware/jetstream": "^0.2.0",
         "discord.js": "^14.16.3",
         "dotenv": "^16.4.5",
         "glob": "^11.0.0",
@@ -41,6 +46,7 @@
         "multiformats": "^13.3.1",
         "pino": "^9.5.0",
         "type-fest": "^4.27.0",
+        "ws": "^8.18.0",
         "zod": "^3.23.8"
     },
     "volta": {

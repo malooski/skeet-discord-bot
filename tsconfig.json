@@ -9,7 +9,7 @@
         "outDir": "./dist",
 
         // if TS 5.x+
-        "moduleResolution": "Node10",
+        "moduleResolution": "bundler",
         "moduleDetection": "force",
 
         // best practices

@@ -1,6 +1,4 @@
 import type { AppBskyFeedDefs } from "@atproto/api";
-import { HandleResolver } from "@atproto/identity";
-import { toDid } from "@maljs/bsky-helpers";
 
 /**
  * Formats a Blue Sky URI for a post
@@ -46,4 +44,10 @@ export async function convertAtUriToBskyUri(uri: string, handle: string) {
     }
 
     return formatBskyPostUri(handle ?? parsed.authority, postHash);
+}
+
+export function getFullsizeImageUrl(did: string, ref: string, mimeType: string) {
+    const mime = mimeType.split("/").at(-1);
+
+    return `https://cdn.bsky.app/img/feed_thumbnail/plain/${did}/${ref}@${mime}`;
 }

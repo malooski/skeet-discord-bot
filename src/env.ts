@@ -10,6 +10,8 @@ const ENV_VARS_SCHEMA = z.object({
     DISCORD_TOKEN: z.string(),
     DISCORD_CLIENT_ID: z.string(),
     DISCORD_ADMIN_ID: z.string(),
+    DISCORD_CHANNEL_ID_DEBUG: z.string().optional(),
+
     BSKY_IDENTIFIER: z.string(),
     BSKY_PASSWORD: z.string(),
     PROFILE_CACHE_MAX: z.coerce.number().default(100),
