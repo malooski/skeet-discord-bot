@@ -14,8 +14,12 @@ import { removeNilEntries } from "./helpers/common";
 import { fetchHandle } from "./helpers/handle";
 import type { PrismaConnector } from "./helpers/prisma";
 import { logger } from "./logger";
+import { RunningAverage } from "./running-average";
 
 let createdOpCount = 0;
+let lastMessageTime = Date.now();
+const messageTimeAverage = new RunningAverage(1000);
+const messageProcessingTimeAverage = new RunningAverage(1000);
 
 const GUILD_COMMANDS_TTL = 1000 * 60 * 60 * 24; // 1 days
 const SERVICE_URL = new URL("https://bsky.social");
@@ -31,6 +35,7 @@ export class SkeetPoster {
     creds = new CredentialSession(SERVICE_URL);
     agent = new Agent(this.creds);
     db = new PrismaClient();
+    cursor: string | undefined = undefined;
 
     // Map<Did, CachedTrackingConfig[]>
     configs = new Map<string, CachedTrackingConfig[]>();
@@ -280,25 +285,36 @@ export class SkeetPoster {
         await this.startRefreshingGuildCommands();
 
         setInterval(() => {
-            logger.info(`Processed ${createdOpCount} ops/s`);
+            logger.info(
+                {
+                    avgMessageMs: messageTimeAverage.get(),
+                    ops: createdOpCount,
+                    avgProcessingMs: messageProcessingTimeAverage.get(),
+                },
+                `Processed ${createdOpCount} ops/s`,
+            );
             createdOpCount = 0;
         }, 1000);
 
         // Listen on firehose
         this.jetstream.onCreate("app.bsky.feed.post", async (event) => {
+            createdOpCount++;
+            const now = Date.now();
+            const messageTime = now - lastMessageTime;
+            messageTimeAverage.add(messageTime);
+            lastMessageTime = now;
+
+            lastMessageTime = now;
             try {
                 if (event.commit.record.$type !== "app.bsky.feed.post") {
                     logger.error({ event }, "Event is not a feed post");
                     return;
                 }
 
-                createdOpCount++;
                 const record = event.commit.record;
 
                 const configs = this.configs.get(event.did);
                 if (!configs || configs.length === 0) return;
-
-                const startTime = Date.now();
 
                 // Warn if the event is older than 10 seconds
                 const eventTime = new Date(event.time_us / 1000);
@@ -328,7 +344,7 @@ export class SkeetPoster {
                 }
 
                 if (IS_DEV_MODE) {
-                    text += `\n\n${JSON.stringify(event.commit.record)}`;
+                    text += `\n\nEVENT: ${JSON.stringify(event)}`;
                 }
 
                 const resp = await this.agent.getProfile({ actor: event.did });
@@ -336,7 +352,7 @@ export class SkeetPoster {
 
                 const embed = createSkeetEmbed({
                     text: text,
-                    uri: formatBskyPostUri(profile.handle, event.commit.cid),
+                    uri: formatBskyPostUri(profile.handle, event.commit.rkey),
                     authorHandle: profile.handle,
                     authorUrl: makeProfileLink(profile.handle),
                     createdAt: new Date(event.commit.record.createdAt),
@@ -361,11 +377,15 @@ export class SkeetPoster {
                 );
 
                 const endTime = Date.now();
-                const duration = endTime - startTime;
+                const duration = endTime - now;
                 const offset = endTime - eventTime.getTime();
                 logger.info({ duration, offset, event }, "Processed event");
             } catch (e) {
                 logger.error({ error: e, event }, "Error processing event");
+            } finally {
+                const endTime = Date.now();
+                const duration = endTime - now;
+                messageProcessingTimeAverage.add(duration);
             }
         });
 
